@@ -6,6 +6,7 @@
 #include <browedit/Node.h>
 #include <browedit/gl/Texture.h>
 #include <browedit/gl/FBO.h>
+#include <glad/gl.h>
 #include <browedit/components/Rsw.h>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -24,6 +25,8 @@
 #include <browedit/math/HermiteCurve.h>
 #include <browedit/math/Ray.h>
 #include <browedit/CinematicDraw.h>
+#include <browedit/util/Util.h>
+#include <json.hpp>
 
 namespace
 {
@@ -1451,6 +1454,557 @@ int selectedKeyFrame = -1;
 int selectedTrack = -1;
 bool playing = true;
 
+// ======================================================================================================
+// Video export (cinematic mode): non-blocking recorder, ffmpeg + H.264 / hardware encoders, MP4 by default
+// ======================================================================================================
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <deque>
+#include <cmath>
+#include <chrono>
+#include <fstream>
+
+namespace videoexport
+{
+	enum class Enc { X264, X265, Nvenc, Qsv, Amf };
+
+	struct Settings
+	{
+		int encoder = 0;			// 0 auto, 1 x264, 2 x265, 3 nvenc, 4 qsv, 5 amf
+		int quality = 1;			// 0 draft, 1 good, 2 high
+		int resPreset = 1;			// 0 720p, 1 1080p, 2 1440p, 3 4K, 4 custom
+		int resolution[2] = { 1920, 1080 };
+		int fpsPreset = 1;			// 0 24, 1 30, 2 60, 3 custom
+		float fps = 30;
+		std::string file = "video.mp4";
+		bool openWhenDone = true;
+		int loops = 1;
+		float rangeStart = 0;
+		float rangeEnd = 0;			// 0 = to the end of the cinematic
+	};
+	Settings settings;
+	bool settingsLoaded = false;
+
+	void saveSettings()
+	{
+		nlohmann::json j;
+		j["encoder"] = settings.encoder; j["quality"] = settings.quality; j["resPreset"] = settings.resPreset;
+		j["resolution"] = { settings.resolution[0], settings.resolution[1] };
+		j["fpsPreset"] = settings.fpsPreset; j["fps"] = settings.fps; j["file"] = settings.file;
+		j["openWhenDone"] = settings.openWhenDone; j["loops"] = settings.loops;
+		std::ofstream out("video_export.json");
+		if (out.is_open()) out << j.dump(1);
+	}
+	void loadSettings()
+	{
+		settingsLoaded = true;
+		try
+		{
+			std::ifstream in("video_export.json");
+			if (!in.is_open()) return;
+			nlohmann::json j; in >> j;
+			settings.encoder = j.value("encoder", settings.encoder); settings.quality = j.value("quality", settings.quality);
+			settings.resPreset = j.value("resPreset", settings.resPreset);
+			if (j.contains("resolution")) { settings.resolution[0] = j["resolution"][0]; settings.resolution[1] = j["resolution"][1]; }
+			settings.fpsPreset = j.value("fpsPreset", settings.fpsPreset); settings.fps = j.value("fps", settings.fps);
+			settings.file = j.value("file", settings.file); settings.openWhenDone = j.value("openWhenDone", settings.openWhenDone);
+			settings.loops = j.value("loops", settings.loops);
+		}
+		catch (...) {}
+	}
+
+	std::string quoted(const std::string& s) { return "\"" + s + "\""; }
+
+	// runs a command line, collects stdout+stderr, returns the exit code (-1 when it could not be started)
+	int runProcess(const std::string& cmd, std::string& out, int timeoutMs)
+	{
+		SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES) };
+		sa.bInheritHandle = TRUE;
+		HANDLE r = nullptr, w = nullptr;
+		if (!CreatePipe(&r, &w, &sa, 0)) return -1;
+		SetHandleInformation(r, HANDLE_FLAG_INHERIT, 0);
+		STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+		si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+		si.wShowWindow = SW_HIDE;
+		si.hStdOutput = w; si.hStdError = w;
+		PROCESS_INFORMATION pi = { 0 };
+		std::string c = cmd;
+		if (!CreateProcessA(nullptr, c.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+		{
+			CloseHandle(r); CloseHandle(w);
+			return -1;
+		}
+		CloseHandle(w);
+		char buf[2048]; DWORD n;
+		while (ReadFile(r, buf, sizeof(buf), &n, nullptr) && n > 0)
+			out.append(buf, n);
+		WaitForSingleObject(pi.hProcess, timeoutMs);
+		DWORD code = 1;
+		GetExitCodeProcess(pi.hProcess, &code);
+		CloseHandle(r); CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+		return (int)code;
+	}
+
+	std::string ffmpegExe(BrowEdit* be) { return quoted(be->config.ffmpegPath.empty() ? "ffmpeg" : be->config.ffmpegPath); }
+
+	std::string encoderName(Enc e) { return e == Enc::X264 ? "libx264" : e == Enc::X265 ? "libx265" : e == Enc::Nvenc ? "h264_nvenc" : e == Enc::Qsv ? "h264_qsv" : "h264_amf"; }
+
+	// codec arguments and the pixel format conversion for each encoder and quality (0 draft, 1 good, 2 high)
+	std::string encoderArgs(Enc e, int q, bool mp4like)
+	{
+		q = glm::clamp(q, 0, 2);
+		static const char* x264Preset[] = { "ultrafast", "veryfast", "faster" };
+		static const int x264Crf[] = { 30, 23, 18 };
+		static const char* x265Preset[] = { "ultrafast", "veryfast", "fast" };
+		static const int x265Crf[] = { 32, 26, 21 };
+		static const char* nvPreset[] = { "p3", "p4", "p5" };
+		static const int nvCq[] = { 32, 26, 20 };
+		static const int qsvQ[] = { 30, 24, 19 };
+		static const char* amfQuality[] = { "speed", "balanced", "quality" };
+		static const int amfQp[] = { 30, 24, 19 };
+		std::string a;
+		switch (e)
+		{
+		case Enc::X264: a = "-vf vflip,format=yuv420p -c:v libx264 -preset " + std::string(x264Preset[q]) + " -crf " + std::to_string(x264Crf[q]); break;
+		case Enc::X265: a = "-vf vflip,format=yuv420p -c:v libx265 -preset " + std::string(x265Preset[q]) + " -crf " + std::to_string(x265Crf[q]) + (mp4like ? " -tag:v hvc1" : ""); break;
+		case Enc::Nvenc: a = "-vf vflip,format=yuv420p -c:v h264_nvenc -preset " + std::string(nvPreset[q]) + " -rc vbr -cq " + std::to_string(nvCq[q]) + " -b:v 0"; break;
+		case Enc::Qsv: a = "-vf vflip,format=nv12 -c:v h264_qsv -preset veryfast -global_quality " + std::to_string(qsvQ[q]); break;
+		case Enc::Amf: a = "-vf vflip,format=yuv420p -c:v h264_amf -quality " + std::string(amfQuality[q]) + " -rc cqp -qp_i " + std::to_string(amfQp[q]) + " -qp_p " + std::to_string(amfQp[q] + 2) + " -qp_b " + std::to_string(amfQp[q] + 2); break;
+		}
+		return a;
+	}
+
+	// what this ffmpeg build can actually encode (hardware encoders are tested with a tiny encode)
+	struct Detected
+	{
+		std::atomic<int> state{ 0 };		// 0 not started, 1 checking, 2 done
+		bool ffmpegFound = false;
+		bool has[5] = { false, false, false, false, false };	// X264, X265, Nvenc, Qsv, Amf
+		std::string note;
+	};
+	Detected detected;
+
+	void startDetection(BrowEdit* be)
+	{
+		if (detected.state.load() != 0) return;
+		detected.state = 1;
+		std::string exe = ffmpegExe(be);
+		std::thread([exe]()
+		{
+			std::string list;
+			int code = runProcess(exe + " -hide_banner -encoders", list, 15000);
+			detected.ffmpegFound = code >= 0 && list.find("Encoders") != std::string::npos;
+			if (detected.ffmpegFound)
+			{
+				detected.has[0] = list.find(" libx264 ") != std::string::npos;
+				detected.has[1] = list.find(" libx265 ") != std::string::npos;
+				const Enc hw[3] = { Enc::Nvenc, Enc::Qsv, Enc::Amf };
+				for (int i = 0; i < 3; i++)
+				{
+					if (list.find(" " + encoderName(hw[i]) + " ") == std::string::npos) continue;
+					std::string out;
+					std::string cmd = exe + " -hide_banner -loglevel error -nostdin -f lavfi -i color=c=black:s=320x240:r=30:d=0.3 " + encoderArgs(hw[i], 1, true) + " -f null -";
+					// the test source is not rgb, but the vf chain converts anyway
+					detected.has[2 + i] = runProcess(cmd, out, 15000) == 0;
+				}
+			}
+			detected.state = 2;
+		}).detach();
+	}
+
+	// ---------------------------------------------------------------------------------------------------
+	struct Recorder
+	{
+		enum class State { Idle, Recording, Flushing, Done, Failed, Cancelled } state = State::Idle;
+		HANDLE procHandle = nullptr, procThread = nullptr, stdinWrite = nullptr, logRead = nullptr;
+		std::thread writer, logger;
+		std::mutex qMutex;
+		std::deque<std::vector<char>> queue;
+		std::atomic<bool> writerFinish{ false }, writerFailed{ false }, writerDone{ false }, cancel{ false };
+		std::mutex logMutex;
+		std::string log;
+		GLuint pbo[2] = { 0, 0 };
+		int W = 0, H = 0, frame = 0, totalFrames = 0, pending = 0;
+		float fps = 30, rangeStart = 0, span = 1;
+		float savedTime = 0; bool savedPlaying = false, savedPreview = false;
+		std::chrono::steady_clock::time_point startedAt;
+		std::string outFile, encoderUsed, message;
+		bool openWhenDone = true;
+		size_t frameBytes = 0;
+	};
+	Recorder rec;
+
+	void cleanupHandles()
+	{
+		if (rec.stdinWrite) { CloseHandle(rec.stdinWrite); rec.stdinWrite = nullptr; }
+		if (rec.writer.joinable()) rec.writer.join();
+		if (rec.logger.joinable()) rec.logger.join();
+		if (rec.logRead) { CloseHandle(rec.logRead); rec.logRead = nullptr; }
+		if (rec.procHandle) { CloseHandle(rec.procHandle); rec.procHandle = nullptr; }
+		if (rec.procThread) { CloseHandle(rec.procThread); rec.procThread = nullptr; }
+		if (rec.pbo[0]) { glDeleteBuffers(2, rec.pbo); rec.pbo[0] = rec.pbo[1] = 0; }
+	}
+
+	void restoreView(MapView& mv)
+	{
+		timeSelected = rec.savedTime;
+		playing = rec.savedPlaying;
+		mv.cinematicPlay = rec.savedPreview;
+	}
+
+	std::string logTail()
+	{
+		std::lock_guard<std::mutex> l(rec.logMutex);
+		return rec.log.size() > 700 ? rec.log.substr(rec.log.size() - 700) : rec.log;
+	}
+
+	bool startRecording(BrowEdit* be, Rsw* rsw, std::string& error)
+	{
+		auto& s = settings;
+		auto& mv = *be->activeMapView;
+		if (detected.state.load() != 2 || !detected.ffmpegFound) { error = "ffmpeg was not found. Set its path in the config window (ffmpeg path)."; return false; }
+		// pick the encoder
+		Enc enc = Enc::X264;
+		bool ok = false;
+		auto pick = [&](Enc e, int idx) { if (!ok && detected.has[idx]) { enc = e; ok = true; } };
+		switch (s.encoder)
+		{
+		case 1: pick(Enc::X264, 0); break;
+		case 2: pick(Enc::X265, 1); break;
+		case 3: pick(Enc::Nvenc, 2); break;
+		case 4: pick(Enc::Qsv, 3); break;
+		case 5: pick(Enc::Amf, 4); break;
+		default: pick(Enc::Nvenc, 2); pick(Enc::Qsv, 3); pick(Enc::Amf, 4); pick(Enc::X264, 0); pick(Enc::X265, 1); break;
+		}
+		if (!ok) { error = "The selected encoder is not available in this ffmpeg build."; return false; }
+
+		rec.W = glm::max(16, s.resolution[0] & ~1);
+		rec.H = glm::max(16, s.resolution[1] & ~1);
+		rec.fps = glm::max(1.0f, s.fps);
+		rec.rangeStart = glm::clamp(s.rangeStart, 0.0f, rsw->cinematicLength);
+		float end = s.rangeEnd > rec.rangeStart ? glm::min(s.rangeEnd, rsw->cinematicLength) : rsw->cinematicLength;
+		rec.span = glm::max(0.05f, end - rec.rangeStart);
+		rec.totalFrames = glm::max(1, (int)std::ceil(rec.fps * rec.span * glm::max(1, s.loops)));
+		rec.frameBytes = (size_t)rec.W * rec.H * 3;
+		rec.outFile = s.file.empty() ? "video.mp4" : s.file;
+		rec.openWhenDone = s.openWhenDone;
+		std::string ext = rec.outFile.find_last_of('.') == std::string::npos ? "" : rec.outFile.substr(rec.outFile.find_last_of('.'));
+		for (auto& c : ext) c = (char)tolower(c);
+		if (ext.empty()) { rec.outFile += ".mp4"; ext = ".mp4"; }
+		bool mp4like = ext == ".mp4" || ext == ".mov" || ext == ".m4v";
+
+		std::string cmd = ffmpegExe(be) + " -y -hide_banner -loglevel warning -nostats -f rawvideo -pix_fmt rgb24 -s " + std::to_string(rec.W) + "x" + std::to_string(rec.H)
+			+ " -framerate " + std::to_string(rec.fps) + " -i - " + encoderArgs(enc, s.quality, mp4like) + (mp4like ? " -movflags +faststart" : "") + " " + quoted(rec.outFile);
+
+		SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES) };
+		sa.bInheritHandle = TRUE;
+		HANDLE inR = nullptr, inW = nullptr, outR = nullptr, outW = nullptr;
+		if (!CreatePipe(&inR, &inW, &sa, 0) || !CreatePipe(&outR, &outW, &sa, 0)) { error = "Could not create pipes for ffmpeg."; return false; }
+		SetHandleInformation(inW, HANDLE_FLAG_INHERIT, 0);
+		SetHandleInformation(outR, HANDLE_FLAG_INHERIT, 0);
+		STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+		si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+		si.wShowWindow = SW_HIDE;
+		si.hStdInput = inR; si.hStdOutput = outW; si.hStdError = outW;
+		PROCESS_INFORMATION pi = { 0 };
+		if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+		{
+			CloseHandle(inR); CloseHandle(inW); CloseHandle(outR); CloseHandle(outW);
+			error = "Could not start ffmpeg.";
+			return false;
+		}
+		CloseHandle(inR); CloseHandle(outW);
+		rec.procHandle = pi.hProcess; rec.procThread = pi.hThread; rec.stdinWrite = inW; rec.logRead = outR;
+		rec.log.clear();
+		rec.writerFinish = false; rec.writerFailed = false; rec.writerDone = false; rec.cancel = false;
+		rec.queue.clear();
+		rec.logger = std::thread([]()
+		{
+			char buf[1024]; DWORD n;
+			while (ReadFile(rec.logRead, buf, sizeof(buf), &n, nullptr) && n > 0)
+			{
+				std::lock_guard<std::mutex> l(rec.logMutex);
+				rec.log.append(buf, n);
+				if (rec.log.size() > 8192) rec.log.erase(0, rec.log.size() - 4096);
+			}
+		});
+		rec.writer = std::thread([]()
+		{
+			while (true)
+			{
+				std::vector<char> f;
+				{
+					std::lock_guard<std::mutex> l(rec.qMutex);
+					if (!rec.queue.empty()) { f = std::move(rec.queue.front()); rec.queue.pop_front(); }
+				}
+				if (f.empty())
+				{
+					if (rec.writerFinish.load()) break;
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					continue;
+				}
+				size_t offset = 0;
+				while (offset < f.size())
+				{
+					DWORD written = 0;
+					if (!WriteFile(rec.stdinWrite, f.data() + offset, (DWORD)(f.size() - offset), &written, nullptr) || written == 0)
+					{
+						rec.writerFailed = true;
+						rec.writerDone = true;
+						return;
+					}
+					offset += written;
+				}
+			}
+			rec.writerDone = true;
+		});
+
+		glGenBuffers(2, rec.pbo);
+		for (int i = 0; i < 2; i++)
+		{
+			glBindBuffer(GL_PIXEL_PACK_BUFFER, rec.pbo[i]);
+			glBufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)rec.frameBytes, nullptr, GL_STREAM_READ);
+		}
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+		rec.savedTime = timeSelected; rec.savedPlaying = playing; rec.savedPreview = mv.cinematicPlay;
+		playing = false;
+		rec.frame = 0; rec.pending = 0;
+		rec.encoderUsed = encoderName(enc);
+		rec.startedAt = std::chrono::steady_clock::now();
+		rec.state = Recorder::State::Recording;
+		return true;
+	}
+
+	void pushPbo(int idx)
+	{
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, rec.pbo[idx]);
+		void* p = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, (GLsizeiptr)rec.frameBytes, GL_MAP_READ_BIT);
+		if (p)
+		{
+			std::vector<char> f(rec.frameBytes);
+			memcpy(f.data(), p, rec.frameBytes);
+			glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+			std::lock_guard<std::mutex> l(rec.qMutex);
+			rec.queue.push_back(std::move(f));
+		}
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+	}
+
+	void abort(MapView& mv, Recorder::State st, const std::string& msg, bool deleteFile)
+	{
+		rec.cancel = true;
+		if (rec.stdinWrite) { CloseHandle(rec.stdinWrite); rec.stdinWrite = nullptr; }
+		if (rec.procHandle) TerminateProcess(rec.procHandle, 1);
+		rec.writerFinish = true;
+		cleanupHandles();
+		if (deleteFile) DeleteFileA(rec.outFile.c_str());
+		restoreView(mv);
+		rec.state = st;
+		rec.message = msg;
+	}
+
+	// renders as many frames as fit in a few milliseconds, so the editor stays responsive while recording
+	void tick(BrowEdit* be)
+	{
+		if (rec.state != Recorder::State::Recording && rec.state != Recorder::State::Flushing) return;
+		auto& mv = *be->activeMapView;
+		if (rec.writerFailed.load())
+		{
+			abort(mv, Recorder::State::Failed, "ffmpeg stopped while recording.\n" + logTail(), true);
+			return;
+		}
+		if (rec.cancel.load() && rec.state == Recorder::State::Recording)
+		{
+			abort(mv, Recorder::State::Cancelled, "Recording cancelled.", true);
+			return;
+		}
+		if (rec.state == Recorder::State::Recording)
+		{
+			auto t0 = std::chrono::steady_clock::now();
+			while (rec.frame < rec.totalFrames)
+			{
+				{
+					std::lock_guard<std::mutex> l(rec.qMutex);
+					if (rec.queue.size() >= 6) break;		// the encoder is behind, wait a moment
+				}
+				if (mv.fbo->getWidth() != rec.W || mv.fbo->getHeight() != rec.H)
+					mv.fbo->resize(rec.W, rec.H);
+				float t = rec.rangeStart + (float)std::fmod(rec.frame / rec.fps, rec.span);
+				timeSelected = t;
+				mv.cinematicPlay = true;
+				mv.render(be);
+				// asynchronous readback: this frame goes into one buffer while the previous one is copied out of the other
+				int cur = rec.frame % 2;
+				mv.fbo->use();
+				glPixelStorei(GL_PACK_ALIGNMENT, 1);
+				glBindBuffer(GL_PIXEL_PACK_BUFFER, rec.pbo[cur]);
+				glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+				glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+				glPixelStorei(GL_PACK_ALIGNMENT, 4);
+				if (rec.frame > 0)
+					pushPbo((rec.frame - 1) % 2);
+				rec.frame++;
+				if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() > 25.0)
+					break;
+			}
+			if (rec.frame >= rec.totalFrames)
+			{
+				pushPbo((rec.frame - 1) % 2);		// the last frame
+				rec.writerFinish = true;
+				rec.state = Recorder::State::Flushing;
+			}
+		}
+		else if (rec.state == Recorder::State::Flushing)
+		{
+			if (rec.writerDone.load())
+			{
+				if (rec.stdinWrite) { CloseHandle(rec.stdinWrite); rec.stdinWrite = nullptr; }
+				if (WaitForSingleObject(rec.procHandle, 0) == WAIT_OBJECT_0)
+				{
+					DWORD code = 1;
+					GetExitCodeProcess(rec.procHandle, &code);
+					std::string tail = logTail();
+					cleanupHandles();
+					restoreView(mv);
+					if (code == 0)
+					{
+						rec.state = Recorder::State::Done;
+						rec.message = "Saved " + rec.outFile;
+						if (rec.openWhenDone)
+						{
+							std::string c = "explorer.exe /select," + quoted(rec.outFile);
+							STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+							PROCESS_INFORMATION pi = { 0 };
+							if (CreateProcessA(nullptr, c.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); }
+						}
+					}
+					else
+					{
+						rec.state = Recorder::State::Failed;
+						rec.message = "ffmpeg failed (code " + std::to_string(code) + ").\n" + tail;
+					}
+				}
+			}
+		}
+	}
+
+	// settings window + progress window
+	void popups(BrowEdit* be, Rsw* rsw)
+	{
+		auto& s = settings;
+		if (ImGui::BeginPopupModal("RecordVideo", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			if (!settingsLoaded) loadSettings();
+			startDetection(be);
+			int st = detected.state.load();
+			if (st != 2)
+				ImGui::TextDisabled("Checking ffmpeg and the available encoders...");
+			else if (!detected.ffmpegFound)
+				ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "ffmpeg was not found. Set its path in the config window (ffmpeg path).");
+			else
+				ImGui::TextDisabled("Found: %s%s%s%s%s", detected.has[0] ? "H.264 " : "", detected.has[1] ? "H.265 " : "", detected.has[2] ? "NVIDIA " : "", detected.has[3] ? "Intel " : "", detected.has[4] ? "AMD" : "");
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Re-check")) detected.state = 0;
+
+			ImGui::SetNextItemWidth(300);
+			static const char* encNames[] = { "Automatic (hardware if available, otherwise H.264)", "H.264 (CPU, libx264)", "H.265 (CPU, libx265)", "H.264 NVIDIA (NVENC)", "H.264 Intel (QuickSync)", "H.264 AMD (AMF)" };
+			ImGui::Combo("Encoder", &s.encoder, encNames, 6);
+			ImGui::SetNextItemWidth(300);
+			ImGui::Combo("Quality", &s.quality, "Draft (fastest)\0Good\0High (bigger file)\0");
+			static const int resW[] = { 1280, 1920, 2560, 3840 }, resH[] = { 720, 1080, 1440, 2160 };
+			ImGui::SetNextItemWidth(300);
+			if (ImGui::Combo("Resolution", &s.resPreset, "1280 x 720 (720p)\0" "1920 x 1080 (1080p)\0" "2560 x 1440 (1440p)\0" "3840 x 2160 (4K)\0" "Custom\0"))
+				if (s.resPreset < 4) { s.resolution[0] = resW[s.resPreset]; s.resolution[1] = resH[s.resPreset]; }
+			if (s.resPreset == 4)
+			{
+				ImGui::SetNextItemWidth(300);
+				ImGui::InputInt2("Size", s.resolution);
+			}
+			static const float fpsV[] = { 24, 30, 60 };
+			ImGui::SetNextItemWidth(300);
+			if (ImGui::Combo("Frame rate", &s.fpsPreset, "24 fps\0" "30 fps\0" "60 fps\0" "Custom\0"))
+				if (s.fpsPreset < 3) s.fps = fpsV[s.fpsPreset];
+			if (s.fpsPreset == 3)
+			{
+				ImGui::SetNextItemWidth(300);
+				ImGui::DragFloat("Fps", &s.fps, 1, 1, 240);
+			}
+			ImGui::SetNextItemWidth(140);
+			ImGui::DragFloat("From (s)", &s.rangeStart, 0.1f, 0, rsw->cinematicLength);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(140);
+			ImGui::DragFloat("To (s, 0 = end)", &s.rangeEnd, 0.1f, 0, rsw->cinematicLength);
+			ImGui::SetNextItemWidth(140);
+			ImGui::InputInt("Loops", &s.loops);
+			s.loops = glm::clamp(s.loops, 1, 50);
+			ImGui::SetNextItemWidth(300);
+			ImGui::InputText("File", &s.file);
+			ImGui::SameLine();
+			if (ImGui::Button("Browse##videofile"))
+			{
+				auto path = util::SaveAsDialog(s.file, "MP4 video\0*.mp4\0Matroska video\0*.mkv\0QuickTime\0*.mov\0");
+				if (!path.empty()) s.file = path;
+			}
+			ImGui::Checkbox("Show the file in the explorer when done", &s.openWhenDone);
+			float seconds = (s.rangeEnd > s.rangeStart ? glm::min(s.rangeEnd, rsw->cinematicLength) - s.rangeStart : rsw->cinematicLength - s.rangeStart) * s.loops;
+			ImGui::TextDisabled("%d frames, %.1f s of video", (int)std::ceil(glm::max(0.0f, seconds) * s.fps), glm::max(0.0f, seconds));
+			ImGui::Separator();
+			static std::string startError;
+			bool canRecord = st == 2 && detected.ffmpegFound;
+			if (!canRecord) ImGui::BeginDisabled();
+			if (ImGui::Button("Record", ImVec2(120, 0)))
+			{
+				saveSettings();
+				if (startRecording(be, rsw, startError))
+				{
+					startError.clear();
+					ImGui::CloseCurrentPopup();
+					ImGui::OpenPopup("RecordingProgress");
+				}
+			}
+			if (!canRecord) ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Close", ImVec2(120, 0))) { saveSettings(); ImGui::CloseCurrentPopup(); }
+			if (!startError.empty())
+				ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "%s", startError.c_str());
+			ImGui::EndPopup();
+		}
+
+		if (rec.state == Recorder::State::Recording || rec.state == Recorder::State::Flushing)
+			if (!ImGui::IsPopupOpen("RecordingProgress"))
+				ImGui::OpenPopup("RecordingProgress");
+		if (ImGui::BeginPopupModal("RecordingProgress", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			bool running = rec.state == Recorder::State::Recording || rec.state == Recorder::State::Flushing;
+			if (running)
+			{
+				float progress = rec.totalFrames > 0 ? rec.frame / (float)rec.totalFrames : 0.0f;
+				double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - rec.startedAt).count();
+				double rate = elapsed > 0.1 ? rec.frame / elapsed : 0.0;
+				double eta = rate > 0.01 ? (rec.totalFrames - rec.frame) / rate : 0.0;
+				ImGui::Text("%s  -  %dx%d at %.0f fps  -  %s", rec.state == Recorder::State::Flushing ? "Finishing the file..." : "Recording", rec.W, rec.H, rec.fps, rec.encoderUsed.c_str());
+				ImGui::ProgressBar(progress, ImVec2(420, 0));
+				ImGui::Text("Frame %d / %d   %.1f frames/s   about %d s left", rec.frame, rec.totalFrames, rate, (int)eta);
+				if (rec.state == Recorder::State::Recording && ImGui::Button("Cancel", ImVec2(120, 0)))
+					rec.cancel = true;
+			}
+			else
+			{
+				ImGui::TextWrapped("%s", rec.message.c_str());
+				if (ImGui::Button("Close", ImVec2(120, 0)))
+				{
+					rec.state = Recorder::State::Idle;
+					ImGui::CloseCurrentPopup();
+				}
+			}
+			ImGui::EndPopup();
+		}
+	}
+}
+
+
 
 void BrowEdit::showCinematicModeWindow()
 {
@@ -1528,124 +2082,8 @@ void BrowEdit::showCinematicModeWindow()
 	{
 		ImGui::OpenPopup("RecordVideo");
 	}
-	if (ImGui::BeginPopupModal("RecordVideo"))
-	{
-		static float fps = 30;
-		static int quality = 25;
-		static std::string videoFile = "video.mkv";
-		static int resolution[2] = { 1920,1080 };
-		ImGui::DragFloat("Fps", &fps, 1, 1, 120);
-		ImGui::InputText("Filename", &videoFile);
-		ImGui::InputInt2("Resolution", resolution);
-		ImGui::InputInt("Quality\n(lower = better)", &quality);
-		
-		if (ImGui::Button("Record"))
-		{
-			while(true) {
-				std::string path = config.ffmpegPath + " ";
-				path += "-y ";
-				//path += "-f image2pipe ";
-				//path += "-vcodec png ";
-				path += "-f rawvideo ";
-				path += "-s "+std::to_string(resolution[0]) + "x"+std::to_string(resolution[1]) + " -pix_fmt rgb24 ";
-				path += "-r " + std::to_string(fps) + " "; // FPS
-				path += "-i - ";
-				path += "-pix_fmt yuv420p ";
-				path += "-c:v libx265 -crf "+std::to_string(quality) + " ";
-				path += "-pix_fmt yuv420p ";
-				path += "-nostats ";
-				path += videoFile;
-
-
-				HANDLE hPipeReadStdIn, hPipeWriteStdIn;
-				HANDLE hPipeReadStdOut, hPipeWriteStdOut;
-
-				SECURITY_ATTRIBUTES saAttr = { sizeof(SECURITY_ATTRIBUTES) };
-				saAttr.bInheritHandle = TRUE; // Pipe handles are inherited by child process.
-				saAttr.lpSecurityDescriptor = NULL;
-
-				if (!CreatePipe(&hPipeReadStdOut, &hPipeWriteStdOut, &saAttr, 0))
-				{
-					std::cout << "Error creating pipe" << std::endl;
-					break;
-				}
-
-				if (!CreatePipe(&hPipeReadStdIn, &hPipeWriteStdIn, &saAttr, 0))
-				{
-					std::cout << "Error creating pipe" << std::endl;
-					break;
-				}
-				SetHandleInformation(hPipeWriteStdIn, HANDLE_FLAG_INHERIT, 0);
-
-				STARTUPINFO si = { sizeof(STARTUPINFO) };
-				si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-				si.hStdOutput = hPipeWriteStdOut;
-				si.hStdError = hPipeWriteStdOut;
-				si.hStdInput = hPipeReadStdIn;
-
-				PROCESS_INFORMATION pi = { 0 };
-
-				BOOL fSuccess = CreateProcess(NULL, (LPSTR)path.c_str(), NULL, NULL, TRUE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
-				if (!fSuccess)
-				{
-					std::cout << "Could not start ffmpeg" << std::endl;
-					CloseHandle(hPipeWriteStdIn);
-					CloseHandle(hPipeReadStdIn);
-					break;
-				}
-
-				std::thread t([&]()
-				{
-						while (true)
-						{
-							char buf[1024];
-							DWORD read;
-							auto success = ::ReadFile(hPipeReadStdOut, buf, 1024, &read, nullptr);
-							if (!success)
-								break;
-							std::cout << std::string(buf, read);
-						}
-				});
-				Sleep(100);
-
-				int totalFrames = (int)(fps * rsw->cinematicLength);
-
-				auto& mv = *activeMapView;
-				mv.fbo->resize(resolution[0], resolution[1]);
-
-
-
-
-				for (int i = 0; i < totalFrames; i++)
-				{
-					float time = i * 1.0f / fps;
-					std::cout << "Frame\t" << i <<", "<< time << "s\t";
-
-					mv.cinematicPlay = true;
-					timeSelected = time;
-					int len = resolution[0] * resolution[1] * 3;
-					mv.render(this);
-					//char* frameData = mv.fbo->saveToMemoryPng(len);
-					char* frameData = mv.fbo->saveToMemoryRaw();
-					std::cout << len << " bytes" << std::endl;
-					DWORD dwWritten;
-					::WriteFile(hPipeWriteStdIn, frameData, len, &dwWritten, NULL);
-					delete[] frameData;
-				}
-				CloseHandle(hPipeWriteStdOut);
-				CloseHandle(hPipeReadStdOut);
-				CloseHandle(hPipeWriteStdIn);
-				CloseHandle(hPipeReadStdIn);
-				CloseHandle(pi.hProcess);
-				CloseHandle(pi.hThread);
-				t.join();
-				break;
-			}
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::EndPopup();
-	}
+	videoexport::tick(this);
+	videoexport::popups(this, rsw);
 
 
 	// ---- extra controls -------------------------------------------------------------------------------
