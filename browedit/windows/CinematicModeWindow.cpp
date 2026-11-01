@@ -1514,7 +1514,7 @@ namespace videoexport
 		catch (...) {}
 	}
 
-	std::string quoted(const std::string& s) { return "\"" + s + "\""; }
+	std::string quoteArg(const std::string& s) { return "\"" + s + "\""; }
 
 	// runs a command line, collects stdout+stderr, returns the exit code (-1 when it could not be started)
 	int runProcess(const std::string& cmd, std::string& out, int timeoutMs)
@@ -1546,7 +1546,7 @@ namespace videoexport
 		return (int)code;
 	}
 
-	std::string ffmpegExe(BrowEdit* be) { return quoted(be->config.ffmpegPath.empty() ? "ffmpeg" : be->config.ffmpegPath); }
+	std::string ffmpegExe(BrowEdit* be) { return quoteArg(be->config.ffmpegPath.empty() ? "ffmpeg" : be->config.ffmpegPath); }
 
 	std::string encoderName(Enc e) { return e == Enc::X264 ? "libx264" : e == Enc::X265 ? "libx265" : e == Enc::Nvenc ? "h264_nvenc" : e == Enc::Qsv ? "h264_qsv" : "h264_amf"; }
 
@@ -1695,7 +1695,7 @@ namespace videoexport
 		bool mp4like = ext == ".mp4" || ext == ".mov" || ext == ".m4v";
 
 		std::string cmd = ffmpegExe(be) + " -y -hide_banner -loglevel warning -nostats -f rawvideo -pix_fmt rgb24 -s " + std::to_string(rec.W) + "x" + std::to_string(rec.H)
-			+ " -framerate " + std::to_string(rec.fps) + " -i - " + encoderArgs(enc, s.quality, mp4like) + (mp4like ? " -movflags +faststart" : "") + " " + quoted(rec.outFile);
+			+ " -framerate " + std::to_string(rec.fps) + " -i - " + encoderArgs(enc, s.quality, mp4like) + (mp4like ? " -movflags +faststart" : "") + " " + quoteArg(rec.outFile);
 
 		SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES) };
 		sa.bInheritHandle = TRUE;
@@ -1874,7 +1874,7 @@ namespace videoexport
 						rec.message = "Saved " + rec.outFile;
 						if (rec.openWhenDone)
 						{
-							std::string c = "explorer.exe /select," + quoted(rec.outFile);
+							std::string c = "explorer.exe /select," + quoteArg(rec.outFile);
 							STARTUPINFOA si = { sizeof(STARTUPINFOA) };
 							PROCESS_INFORMATION pi = { 0 };
 							if (CreateProcessA(nullptr, c.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); }
