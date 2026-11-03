@@ -96,6 +96,7 @@
     <ClCompile Include="browedit\MapView.Gatmode.cpp" />
     <ClCompile Include="browedit\MapView.Heightmode.cpp" />
     <ClCompile Include="browedit\CliffTool.cpp" />
+    <ClCompile Include="browedit\ShapeTool.cpp" />
     <ClCompile Include="browedit\ModelVariants.cpp" />
     <ClCompile Include="browedit\MapView.Objectmode.cpp" />
     <ClCompile Include="browedit\MapView.Shadowmode.cpp" />
@@ -257,6 +258,7 @@
     <ClInclude Include="browedit\components\SprRenderer.h" />
     <ClInclude Include="browedit\components\PortalRenderer.h" />
     <ClInclude Include="browedit\CliffTool.h" />
+    <ClInclude Include="browedit\ShapeTool.h" />
     <ClInclude Include="browedit\ModelVariants.h" />
     <ClInclude Include="browedit\components\FxRenderer.h" />
     <ClInclude Include="browedit\components\WaterRenderer.h" />

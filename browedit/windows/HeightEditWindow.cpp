@@ -15,6 +15,7 @@
 #include <browedit/gl/Texture.h>
 #include <browedit/HotkeyRegistry.h>
 #include <browedit/CliffTool.h>
+#include <browedit/ShapeTool.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <GLFW/glfw3.h>
@@ -178,15 +179,18 @@ void BrowEdit::showHeightWindow()
 	{
 		ImGui::RadioButton("Height brush", &cliffBrushInt, 0); ImGui::SameLine();
 		ImGui::RadioButton("Cliff brush", &cliffBrushInt, 1); ImGui::SameLine();
-		ImGui::RadioButton("Cave brush", &cliffBrushInt, 2);
-		cliff::settings().active = cliffBrushInt >= 1;
+		ImGui::RadioButton("Cave brush", &cliffBrushInt, 2); ImGui::SameLine();
+		ImGui::RadioButton("Shape tool", &cliffBrushInt, 3);
+		shapetool::settings().active = cliffBrushInt == 3;
+		if (cliffBrushInt == 3) shapetool::showOptions(this, activeMapView);
+		cliff::settings().active = cliffBrushInt == 1 || cliffBrushInt == 2;
 		cliff::settings().cave = cliffBrushInt == 2;
 		if (cliff::settings().active)
 		{
 			if (cliff::settings().cave) cliff::showCaveOptions(this, activeMapView);
 			else cliff::showOptions(this, activeMapView);
 		}
-		else
+		else if (cliffBrushInt != 3)
 		if (ImGui::TreeNodeEx("Brush Options", ImGuiTreeNodeFlags_DefaultOpen))
 		{
 			ImGui::DragInt("Brush Size", &windowData.heightEdit.doodleSize, 1.0f, 0, 10);

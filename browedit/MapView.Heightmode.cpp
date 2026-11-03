@@ -21,6 +21,7 @@
 #include <browedit/actions/NewObjectAction.h>
 #include <browedit/actions/SelectAction.h>
 #include <browedit/CliffTool.h>
+#include <browedit/ShapeTool.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -260,7 +261,11 @@ void MapView::postRenderHeightMode(BrowEdit* browEdit)
 
 	}
 
-	if (browEdit->heightDoodle && cliff::settings().active)
+	if (browEdit->heightDoodle && shapetool::settings().active)
+	{
+		shapetool::update(this, browEdit, map, gnd, gndRenderer, hovered ? mouse3D : glm::vec3(-1.0f));
+	}
+	else if (browEdit->heightDoodle && cliff::settings().active)
 	{
 		cliff::update(this, browEdit, map, gnd, gndRenderer, hovered ? mouse3D : glm::vec3(-1.0f));
 	}
