@@ -11,6 +11,7 @@
 #include <browedit/actions/GroupAction.h>
 #include <browedit/actions/CubeHeightChangeAction.h>
 #include <imgui.h>
+#include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -225,9 +226,9 @@ namespace shapetool
 		}
 		if (!io.WantTextInput)
 		{
-			if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !s.pts.empty()) s.pts.pop_back();
-			if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s.pts.clear();
-			if (ImGui::IsKeyPressed(ImGuiKey_Enter)) s.applyRequested = true;
+			if (ImGui::IsKeyPressed(GLFW_KEY_BACKSPACE) && !s.pts.empty()) s.pts.pop_back();
+			if (ImGui::IsKeyPressed(GLFW_KEY_ESCAPE)) s.pts.clear();
+			if ((ImGui::IsKeyPressed(GLFW_KEY_ENTER) || ImGui::IsKeyPressed(GLFW_KEY_KP_ENTER))) s.applyRequested = true;
 		}
 		if (s.applyRequested)
 		{
