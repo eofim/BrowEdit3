@@ -57,7 +57,7 @@ void LubRenderer::render(NodeRenderContext& context)
 				util::ResourceManager<gl::TexturePoT>::unload(tex);
 
 		animatedTextures.clear();
-		effectId = RswEffect::EffectType::Emitter;
+		effectId = rswEffect ? rswEffect->id : (int)RswEffect::EffectType::Emitter;	// other ids (e.g. the smoke preview) must not look like a type change every frame
 		lubEffect->animatedTexture = false;
 
 		if (lubEffect && rswEffect && rswEffect->id == RswEffect::EffectType::AnimatedEmitter) {

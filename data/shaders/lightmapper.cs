@@ -149,6 +149,9 @@ layout(std430, binding = 9) buffer ResultBuffer
 
 uniform bool additiveShadow;
 uniform bool shadows;
+uniform int softSamples;
+uniform float softAngleTan;
+uniform float softRadius;
 uniform float lightmapAmbient;
 uniform int quality;
 uniform int lightmapWidth;
@@ -570,7 +573,29 @@ vec4 CalcLight_Post(uint lightIndex, vec3 lightDir, vec3 origin, float attenuati
 	// Collision check
 	if (shadows) {
 		if (shadowStrength < 1 && light.shadowTerrain != 0) {
-			shadowStrength = traceShadow(origin, lightDir, 0.001, distance, light.shadowTerrain != 0);
+			if (softSamples < 2) {
+				shadowStrength = traceShadow(origin, lightDir, 0.001, distance, light.shadowTerrain != 0);
+			} else {
+				// area light: rays towards points spread over the light's size, so the shadow edge fades out
+				vec3 t1 = normalize(cross(lightDir, abs(lightDir.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+				vec3 t2 = cross(lightDir, t1);
+				float acc = 0.0;
+				for (int i = 0; i < softSamples; i++) {
+					float r = sqrt((float(i) + 0.5) / float(softSamples));
+					float th = float(i) * 2.39996323;
+					vec3 off = (t1 * cos(th) + t2 * sin(th)) * r;
+					if (light.type == 2) {
+						acc += min(traceShadow(origin, normalize(lightDir + off * softAngleTan), 0.001, distance, light.shadowTerrain != 0), 1.0);
+					} else {
+						vec3 lp = light.position.xyz + off * softRadius;
+						vec3 d = lp - origin;
+						float dl = length(d);
+						if (dl > 0.0001)
+							acc += min(traceShadow(origin, d / dl, 0.001, dl, light.shadowTerrain != 0), 1.0);
+					}
+				}
+				shadowStrength = acc / float(softSamples);
+			}
 		}
 	}
 	

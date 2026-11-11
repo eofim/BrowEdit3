@@ -1,0 +1,689 @@
+{
+"10": [
+"maemor"
+],
+"13": [
+"effect/safetywall"
+],
+"23": [
+"stonecurse"
+],
+"25": [
+"firewall%d"
+],
+"30": [
+"thunderstorm"
+],
+"40": [
+"cross"
+],
+"41": [
+"angelus"
+],
+"49": [
+"firehit%d"
+],
+"52": [
+"windhit%d"
+],
+"64": [
+"arrowshot"
+],
+"65": [
+"invenom"
+],
+"66": [
+"cure"
+],
+"67": [
+"provoke"
+],
+"68": [
+"mvp"
+],
+"69": [
+"skidtrap"
+],
+"75": [
+"gloria"
+],
+"76": [
+"magnificat"
+],
+"77": [
+"resurrection"
+],
+"78": [
+"recovery"
+],
+"83": [
+"sanctuary"
+],
+"84": [
+"impositio"
+],
+"85": [
+"lexaeterna"
+],
+"86": [
+"aspersio"
+],
+"87": [
+"lexdivina"
+],
+"88": [
+"suffragium"
+],
+"89": [
+"stormgust"
+],
+"90": [
+"lord"
+],
+"91": [
+"benedictio"
+],
+"92": [
+"meteor%d"
+],
+"94": [
+"ufidel_pang"
+],
+"95": [
+"quagmire"
+],
+"96": [
+"firepillar"
+],
+"97": [
+"firepillarbomb"
+],
+"101": [
+"repairweapon"
+],
+"102": [
+"crashearth"
+],
+"103": [
+"weaponperfection"
+],
+"104": [
+"maximizepower"
+],
+"106": [
+"blastmine"
+],
+"107": [
+"claymore"
+],
+"108": [
+"freezing"
+],
+"109": [
+"bubble%d"
+],
+"110": [
+"gaspush"
+],
+"111": [
+"spring"
+],
+"112": [
+"kyrie"
+],
+"113": [
+"magnus"
+],
+"124": [
+"venomdust"
+],
+"126": [
+"poisonreact_1st"
+],
+"127": [
+"poisonreact"
+],
+"129": [
+"venomsplasher"
+],
+"130": [
+"twohand"
+],
+"131": [
+"autocounter"
+],
+"133": [
+"freeze"
+],
+"134": [
+"freezed"
+],
+"135": [
+"icecrash"
+],
+"136": [
+"slowp"
+],
+"139": [
+"sandman"
+],
+"141": [
+"pneuma%d"
+],
+"143": [
+"sonicblow"
+],
+"144": [
+"brandish2"
+],
+"146": [
+"shockwavehit"
+],
+"147": [
+"earthhit"
+],
+"148": [
+"pierce"
+],
+"149": [
+"bowling"
+],
+"150": [
+"spearstab"
+],
+"151": [
+"spearboomerang"
+],
+"152": [
+"holyhit"
+],
+"153": [
+"concentration"
+],
+"154": [
+"bs_refinesuccess"
+],
+"155": [
+"bs_refinefailed"
+],
+"158": [
+"joblvup"
+],
+"169": [
+"energycoat"
+],
+"170": [
+"cartrevolution"
+],
+"181": [
+"mentalbreak"
+],
+"182": [
+"magical"
+],
+"183": [
+"sui_explosion"
+],
+"185": [
+"suicide"
+],
+"186": [
+"yunta_1"
+],
+"187": [
+"yunta_2"
+],
+"188": [
+"yunta_3"
+],
+"189": [
+"yunta_4"
+],
+"190": [
+"yunta_5"
+],
+"191": [
+"homing"
+],
+"192": [
+"poison"
+],
+"193": [
+"silence"
+],
+"194": [
+"stun"
+],
+"195": [
+"stonecurse"
+],
+"197": [
+"sleep"
+],
+"199": [
+"pong%d"
+],
+"204": [
+"\\xbb\\xa1\\xb0\\xa3\\xc6\\xf7\\xbc\\xc7"
+],
+"205": [
+"\\xc1\\xd6\\xc8\\xab\\xc6\\xf7\\xbc\\xc7"
+],
+"206": [
+"\\xb3\\xeb\\xb6\\xf5\\xc6\\xf7\\xbc\\xc7"
+],
+"207": [
+"\\xc7\\xcf\\xbe\\xe1\\xc6\\xf7\\xbc\\xc7"
+],
+"208": [
+"\\xc6\\xc4\\xb6\\xf5\\xc6\\xf7\\xbc\\xc7"
+],
+"209": [
+"\\xc3\\xca\\xb7\\xcf\\xc6\\xf7\\xbc\\xc7"
+],
+"210": [
+"fruit"
+],
+"211": [
+"fruit_"
+],
+"213": [
+"deffender"
+],
+"214": [
+"keeping"
+],
+"218": [
+"\\xc1\\xfd\\xc1\\xdf"
+],
+"219": [
+"\\xb0\\xa2\\xbc\\xba"
+],
+"220": [
+"\\xb9\\xf6\\xbc\\xad\\xc5\\xa9"
+],
+"234": [
+"spell"
+],
+"235": [
+"\\xb5\\xf0\\xbd\\xba\\xc6\\xe7"
+],
+"244": [
+"\\xb8\\xc5\\xc1\\xf7\\xb7\\xce\\xb5\\xe5"
+],
+"245": [
+"holy_cross"
+],
+"246": [
+"shield_charge"
+],
+"248": [
+"providence"
+],
+"250": [
+"twohand"
+],
+"251": [
+"devotion"
+],
+"255": [
+"enc_fire"
+],
+"256": [
+"enc_ice"
+],
+"257": [
+"enc_wind"
+],
+"258": [
+"enc_earth"
+],
+"262": [
+"\\xbf\\xac\\xc8\\xaf"
+],
+"268": [
+"steal_coin"
+],
+"269": [
+"strip_weapon"
+],
+"270": [
+"strip_shield"
+],
+"271": [
+"strip_armor"
+],
+"272": [
+"strip_helm"
+],
+"273": [
+"\\xbf\\xac\\xc8\\xaf"
+],
+"305": [
+"p_success"
+],
+"306": [
+"p_failed"
+],
+"311": [
+"loud"
+],
+"337": [
+"joblvup"
+],
+"369": [
+"twohand"
+],
+"371": [
+"angel"
+],
+"372": [
+"devil"
+],
+"390": [
+"melt"
+],
+"391": [
+"cart"
+],
+"392": [
+"sword"
+],
+"406": [
+"\\xbc\\xd2\\xbf\\xef\\xb9\\xf8"
+],
+"407": [
+"\\xbb\\xe7\\xb6\\xf7\\xc8\\xbf\\xb0\\xfa"
+],
+"440": [
+"asum"
+],
+"491": [
+"\\xc2\\xfd\\xbd\\xd2\\xb6\\xb1"
+],
+"492": [
+"ramadan"
+],
+"507": [
+"mapae"
+],
+"508": [
+"itempokjuk"
+],
+"565": [
+"moonlight_1"
+],
+"566": [
+"moonlight_2"
+],
+"567": [
+"moonlight_3"
+],
+"568": [
+"h_levelup"
+],
+"569": [
+"defense"
+],
+"593": [
+"food_str"
+],
+"594": [
+"food_int"
+],
+"595": [
+"food_vit"
+],
+"596": [
+"food_agi"
+],
+"597": [
+"food_dex"
+],
+"598": [
+"food_luk"
+],
+"603": [
+"firehit%d"
+],
+"608": [
+"cook_suc"
+],
+"609": [
+"cook_fail"
+],
+"612": [
+"itempokjuk"
+],
+"618": [
+"firehit"
+],
+"619": [
+"freeze"
+],
+"622": [
+"setsudan"
+],
+"635": [
+"fire dragon"
+],
+"636": [
+"icy"
+],
+"646": [
+"\\xc6\\xae\\xb7\\xa2\\xc5\\xb7"
+],
+"649": [
+"\\xba\\xd2\\xbd\\xba\\xbe\\xc6\\xc0\\xcc"
+],
+"668": [
+"dragon_h"
+],
+"669": [
+"wideb"
+],
+"670": [
+"dfear"
+],
+"677": [
+"cwound"
+],
+"682": [
+"itempokjuk"
+],
+"683": [
+"itempokjuk"
+],
+"684": [
+"itempokjuk"
+],
+"685": [
+"itempokjuk"
+],
+"686": [
+"itempokjuk"
+],
+"699": [
+"flower_leaf"
+],
+"704": [
+"mobile_ef02"
+],
+"705": [
+"mobile_ef01"
+],
+"706": [
+"mobile_ef03"
+],
+"708": [
+"storm_min"
+],
+"709": [
+"pokjuk_jap"
+],
+"717": [
+"angelus"
+],
+"721": [
+"ado"
+],
+"722": [
+"\\xc0\\xcc\\xb1\\xd7\\xb4\\xcf\\xbc\\xc7\\xba\\xea\\xb7\\xb9\\xc0\\xcc\\xc5\\xa9"
+],
+"727": [
+"crimson_r"
+],
+"728": [
+"hell_in"
+],
+"731": [
+"dragon_h"
+],
+"734": [
+"chainlight"
+],
+"745": [
+"aimed"
+],
+"746": [
+"arrowstorm"
+],
+"747": [
+"laulamus"
+],
+"748": [
+"lauagnus"
+],
+"749": [
+"mil_shield"
+],
+"750": [
+"concentration"
+],
+"756": [
+"\\xb9\\xf6\\xbc\\xad\\xc5\\xa9"
+],
+"795": [
+"powerswing"
+],
+"813": [
+"enervation"
+],
+"814": [
+"groomy"
+],
+"815": [
+"ignorance"
+],
+"816": [
+"laziness"
+],
+"817": [
+"unlucky"
+],
+"818": [
+"weakness"
+],
+"920": [
+"firewall_per"
+],
+"926": [
+"hunter_shockwave_blue"
+],
+"959": [
+"poison_mist"
+],
+"960": [
+"eraser_cutter"
+],
+"964": [
+"lava_slide"
+],
+"965": [
+"sonic_claw"
+],
+"966": [
+"tinder"
+],
+"967": [
+"mid_frenzy"
+],
+"975": [
+"vash00"
+],
+"987": [
+"rwc2011"
+],
+"988": [
+"rwc2011_2"
+],
+"1015": [
+"rune_success"
+],
+"1016": [
+"rune_fail"
+],
+"1017": [
+"changematerial_su"
+],
+"1018": [
+"changematerial_fa"
+],
+"1019": [
+"guardian"
+],
+"1020": [
+"bubble%d_1"
+],
+"1021": [
+"dust"
+],
+"1029": [
+"dancingblade"
+],
+"1031": [
+"invincibleoff2"
+],
+"1033": [
+"devil"
+],
+"1040": [
+"gc_darkcrow"
+],
+"1042": [
+"all_full_throttle"
+],
+"1043": [
+"sr_flashcombo"
+],
+"1044": [
+"rk_luxanima"
+],
+"1046": [
+"so_elemental_shield"
+],
+"1047": [
+"ab_offertorium"
+],
+"1048": [
+"wl_telekinesis_intense"
+],
+"1049": [
+"gn_illusiondoping"
+],
+"1050": [
+"nc_magma_eruption"
+],
+"1055": [
+"chill"
+],
+"1057": [
+"ab_offertorium_ring"
+],
+"1062": [
+"stormgust"
+],
+"2222": [
+"S_STORM"
+]
+}

@@ -215,6 +215,7 @@ void BrowEdit::registerActions()
 	HotkeyRegistry::registerAction(HotkeyAction::EditMode_Gat,						[this]() { editMode = EditMode::Gat; });
 	HotkeyRegistry::registerAction(HotkeyAction::EditMode_Color,					[this]() { editMode = EditMode::Color; });
 	HotkeyRegistry::registerAction(HotkeyAction::EditMode_Shadow,					[this]() { editMode = EditMode::Shadow; });
+	HotkeyRegistry::registerAction(HotkeyAction::EditMode_AdvTexture,				[this]() { editMode = EditMode::AdvTexture; });
 	HotkeyRegistry::registerAction(HotkeyAction::EditMode_Sprite,					[this]() { editMode = EditMode::Sprite; });
 	HotkeyRegistry::registerAction(HotkeyAction::EditMode_Cinematic,				[this]() { editMode = EditMode::Cinematic; });
 	HotkeyRegistry::registerAction(HotkeyAction::EditMode_Water,					[this]() { editMode = EditMode::Water; });

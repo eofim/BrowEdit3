@@ -3,6 +3,7 @@
 #include <browedit/util/Util.h>
 #include <browedit/util/FileIO.h>
 #include <iostream>
+#include <algorithm>
 #include <fstream>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -27,6 +28,7 @@ void Rsm::reload()
 	rootMesh = NULL;
 	loaded = false;
 	textures.clear();
+	texSpans.clear();
 	if (rootMesh)
 		delete rootMesh;
 	rootMesh = nullptr;
@@ -91,7 +93,12 @@ void Rsm::reload()
 		}
 
 		for (int i = 0; i < textureCount; i++)
+		{
+			TexSpan sp; sp.offset = (long long)rsmFile->tellg();
 			textures.push_back(util::FileIO::readStringDyn(rsmFile));
+			sp.size = (int)((long long)rsmFile->tellg() - sp.offset); sp.name = textures.back();
+			texSpans.push_back(sp);
+		}
 
 		int rootMeshCount;
 		rsmFile->read(reinterpret_cast<char*>(&rootMeshCount), sizeof(int));
@@ -121,8 +128,10 @@ void Rsm::reload()
 
 		for (int i = 0; i < textureCount; i++)
 		{
+			TexSpan sp; sp.offset = (long long)rsmFile->tellg(); sp.fixed = true; sp.size = 40;
 			std::string textureFileName = util::FileIO::readString(rsmFile, 40);;
 			textures.push_back(textureFileName);
+			sp.name = textureFileName; texSpans.push_back(sp);
 		}
 
 		mainNodeName = util::FileIO::readString(rsmFile, 40);
@@ -267,7 +276,10 @@ Rsm::Mesh::Mesh(Rsm* model, std::istream* rsmFile)
 		rsmFile->read(reinterpret_cast<char*>(&textureCount), sizeof(int));
 		for (int i = 0; i < textureCount; i++)
 		{
+			Rsm::TexSpan sp; sp.offset = (long long)rsmFile->tellg();
 			std::string textureFile = util::FileIO::readStringDyn(rsmFile);
+			sp.size = (int)((long long)rsmFile->tellg() - sp.offset); sp.name = textureFile;
+			model->texSpans.push_back(sp);
 			auto it = std::find(model->textures.begin(), model->textures.end(), textureFile);
 			if (it != model->textures.end())
 			{
@@ -954,6 +966,51 @@ void Rsm::Mesh::save(std::ostream* pFile)
 	pFile->write((char*)&todo, sizeof(int));
 	// Rotation Frame
 	pFile->write((char*)&todo, sizeof(int));
+}
+
+bool Rsm::saveWithTextures(const std::string& outFile, const std::map<std::string, std::string>& newNames, std::string& error)
+{
+	if (texSpans.empty()) { error = "This model has no texture names that can be patched"; return false; }
+	std::istream* is = util::FileIO::open(fileName);
+	if (!is) { error = "Cannot open " + fileName; return false; }
+	is->seekg(0, std::ios::end);
+	auto len = (size_t)is->tellg();
+	is->seekg(0, std::ios::beg);
+	std::vector<char> in(len);
+	is->read(in.data(), len);
+	delete is;
+
+	std::vector<TexSpan> spans = texSpans;
+	std::sort(spans.begin(), spans.end(), [](const TexSpan& a, const TexSpan& b) { return a.offset < b.offset; });
+	std::vector<char> out;
+	out.reserve(len + 256);
+	size_t pos = 0;
+	for (auto& sp : spans)
+	{
+		if (sp.offset < 0 || (size_t)(sp.offset + sp.size) > len || (size_t)sp.offset < pos) { error = "Texture positions in the model could not be read"; return false; }
+		out.insert(out.end(), in.begin() + pos, in.begin() + sp.offset);
+		auto it = newNames.find(sp.name);
+		if (it == newNames.end())
+			out.insert(out.end(), in.begin() + sp.offset, in.begin() + sp.offset + sp.size);
+		else if (sp.fixed)
+		{
+			if (it->second.size() > 39) { error = "Texture name too long for this model version (39 characters at most): " + it->second; return false; }
+			std::string n = it->second; n.resize(40, '\0');
+			out.insert(out.end(), n.begin(), n.end());
+		}
+		else
+		{
+			int l = (int)it->second.size();
+			out.insert(out.end(), (char*)&l, (char*)&l + 4);
+			out.insert(out.end(), it->second.begin(), it->second.end());
+		}
+		pos = (size_t)(sp.offset + sp.size);
+	}
+	out.insert(out.end(), in.begin() + pos, in.end());
+	std::ofstream o(outFile, std::ios::out | std::ios::binary | std::ios::trunc);
+	if (!o) { error = "Cannot write " + outFile; return false; }
+	o.write(out.data(), out.size());
+	return true;
 }
 
 void Rsm::save(const std::string& filename)

@@ -44,6 +44,8 @@ void BrowEdit::toolbar()
 		ImGui::Text("Shadow");
 	else if (editMode == EditMode::Sprite)
 		ImGui::Text("Sprite");
+	else if (editMode == EditMode::AdvTexture)
+		ImGui::Text("Adv. Texture");
 	else if (editMode == EditMode::Cinematic)
 		ImGui::Text("Cinematic");
 	else if (editMode == EditMode::Water)
@@ -76,12 +78,19 @@ void BrowEdit::toolbar()
 	toolBarToggleButton("watermode", ICON_VIEW_WATER_ON, editMode == EditMode::Water, "Water edit mode", HotkeyAction::EditMode_Water, config.toolbarButtonsWallEdit);
 	ImGui::SameLine();
 	toolBarToggleButton("skymapmode", ICON_VIEW_FOG_ON, editMode == EditMode::SkyMap, "SkyMap edit mode", HotkeyAction::EditMode_SkyMap, config.toolbarButtonsWallEdit);
+	ImGui::SameLine();
+	toolBarToggleButton("advtexture", ICON_EDIT_TEXTURE, editMode == EditMode::AdvTexture, "Advanced texture edit mode (F12)", HotkeyAction::EditMode_AdvTexture, config.toolbarButtonsTextureEdit);
 	ImGuiContext& g = *GImGui;
-	ImGui::SameLine(125 + 11 * (config.toolbarButtonSize + g.Style.ItemSpacing.x));
+	ImGui::SameLine(125 + 12 * (config.toolbarButtonSize + g.Style.ItemSpacing.x));
 
 	if (editMode == EditMode::Object)
 	{
 		toolBarToggleButton("showObjectWindow", windowData.objectWindowVisible ? ICON_OBJECTPICKER_OPEN : ICON_OBJECTPICKER_CLOSE, windowData.objectWindowVisible, "Toggle object window", HotkeyAction::ObjectEdit_ToggleObjectWindow, config.toolbarButtonsObjectEdit);
+		ImGui::SameLine();
+	}
+	if (editMode == EditMode::AdvTexture)
+	{
+		toolBarToggleButton("showLayerPicker", windowData.layerPickerVisible ? ICON_TEXTUREPICKER_OPEN : ICON_TEXTUREPICKER_CLOSE, &windowData.layerPickerVisible, "Toggle layer texture picker", config.toolbarButtonsTextureEdit);
 		ImGui::SameLine();
 	}
 	if (editMode == EditMode::Texture)
@@ -187,7 +196,7 @@ void BrowEdit::toolbar()
 			int objectCount = 0;
 			activeMapView->map->rootNode->traverse([&objectCount](Node* n) { if (n->getComponent<RswObject>()) objectCount++; });
 
-			stats = std::format("Map: {}, Tiles({}), Lightmaps({}), Objects({})", activeMapView->map->name.c_str(), activeMapView->map->rootNode->getComponent<Gnd>()->tiles.size(), activeMapView->map->rootNode->getComponent<Gnd>()->lightmaps.size(), objectCount);
+			stats = std::format("Map: {}, Tiles({}), Lightmaps({}), Objects({}){}", activeMapView->map->name.c_str(), activeMapView->map->rootNode->getComponent<Gnd>()->tiles.size(), activeMapView->map->rootNode->getComponent<Gnd>()->lightmaps.size(), objectCount, liveLightmap ? (liveLightmapState.pending ? ", Live lightmap: waiting" : ", Live lightmap: up to date") : "");
 			auto len2 = ImGui::CalcTextSize(stats.c_str());
 
 			ImGui::SameLine(ImGui::GetWindowWidth() - len2.x - len.x - 2 * ImGui::GetStyle().FramePadding.x - 14);

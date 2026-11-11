@@ -40,6 +40,7 @@ namespace gl
 		void resize(int width, int height);
 		void setWrapMode(GLuint mode);
 		void setMipmap(bool value);
+		bool isBakedAtlas() const;
 		GLuint getId(int index = 0);
 		GLuint getAnimatedTextureId();
 

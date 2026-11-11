@@ -178,6 +178,22 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 		if (ImGui::IsMouseClicked(0))
 		{
 			canSelectObject = false;
+			if (browEdit->newNodes.size() == 1 && (browEdit->randomScaleOnPlace || browEdit->randomRotYOnPlace))
+			{
+				auto n0 = browEdit->newNodes[0].first;
+				auto o0 = n0->getComponent<RswObject>();
+				if (o0 && n0->getComponent<RswModel>())
+				{
+					if (browEdit->randomScaleOnPlace)
+					{
+						float lo = glm::min(browEdit->randomScaleMin, browEdit->randomScaleMax), hi = glm::max(browEdit->randomScaleMin, browEdit->randomScaleMax);
+						float f = lo + (hi - lo) * (rand() / (float)RAND_MAX);
+						o0->scale = glm::vec3(f);
+					}
+					if (browEdit->randomRotYOnPlace)
+						o0->rotation.y = 360.0f * (rand() / (float)RAND_MAX);
+				}
+			}
 			auto ga = new GroupAction("Pasting " + std::to_string(browEdit->newNodes.size()) + " objects");
 			bool first = false;
 			for (auto newNode : browEdit->newNodes)
@@ -196,6 +212,16 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 				ga->addAction(sa);
 				first = true;
 			}
+
+			// Auto-GAT: block the tiles under the ground contact area of the new models, in the same undo step
+			if (browEdit->autoGatOnPlace)
+			{
+				std::vector<Node*> placedNodes;
+				for (auto& newNode : browEdit->newNodes)
+					placedNodes.push_back(newNode.first);
+				map->addAutoGatActions(placedNodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, false, true, browEdit->autoGatFillInterior, browEdit->autoGatCloseGap);
+			}
+
 			map->doAction(ga, browEdit);
 			browEdit->newNodes.clear();
 		}
@@ -373,6 +399,11 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 							ga->addAction(new ObjectChangeAction(n, &rswObject->position, originalValues[n].pos, ""));
 						}
 					}
+					std::vector<Node*> movedNodes;
+					for (auto n : map->selectedNodes)
+						if (n->getComponent<RswObject>())
+							movedNodes.push_back(n);
+					map->autoGatFollow(movedNodes, browEdit, ga);
 					map->doAction(ga, browEdit);
 				}
 
@@ -789,7 +820,12 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 			if (justPressed && map->selectedNodes.size() > 0 && map->selectedNodes[0]->getComponent<RswObject>())
 			{
 				if(map->selectedNodes[0]->getComponent<RswObject>()->position != originalPosition)
-					map->doAction(new ObjectChangeAction(map->selectedNodes[0], &map->selectedNodes[0]->getComponent<RswObject>()->position, originalPosition, "Moved"), browEdit);
+				{
+					auto moveGa = new GroupAction();
+					moveGa->addAction(new ObjectChangeAction(map->selectedNodes[0], &map->selectedNodes[0]->getComponent<RswObject>()->position, originalPosition, "Moved"));
+					map->autoGatFollow({ map->selectedNodes[0] }, browEdit, moveGa);
+					map->doAction(moveGa, browEdit);
+				}
 				justPressed = false;
 			}
 			else if (objectSelectLasso.size() > 5)

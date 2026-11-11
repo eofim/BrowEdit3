@@ -178,6 +178,9 @@ public:
 			float doodleSpeed = 0.1f;
 
 			int gatIndex = 0;
+			int applyType = 0;					// type used by "Apply GAT type to selection"
+			bool previewFirst = true;			// first click on a type only previews it on the selection, the second click applies it
+			int previewType = -1;				// type currently previewed (-1 = none)
 
 			//options for selections
 			bool splitTriangleFlip = false;
@@ -207,6 +210,7 @@ public:
 		std::function<void()> progressCancel;
 
 		bool textureManageWindowVisible = true; //TODO: load from config
+		bool layerPickerVisible = true;			// Advanced Texture: Layer texture picker
 		util::FileIO::Node* textureManageWindowSelectedTreeNode = nullptr;
 		std::map<std::string, gl::Texture*> textureManageWindowCache;
 
@@ -229,6 +233,7 @@ public:
 		Cinematic,
 		Water,
 		SkyMap,
+		AdvTexture,
 	} editMode = EditMode::Gat;
 	
 	enum class SelectTool
@@ -292,6 +297,17 @@ public:
 	float nudgeDistance = 1.0f;
 	float rotateDistance = 45.0f;
 	bool useGridForNudge = true;
+
+	// Auto-GAT: when enabled, placing models marks the GAT tiles under their ground contact area
+	bool autoGatOnPlace = false;
+	bool randomScaleOnPlace = false;
+	float randomScaleMin = 0.8f, randomScaleMax = 1.2f;
+	bool randomRotYOnPlace = false;
+	float autoGatBandHeight = 5.0f;	// how far above the ground a model surface may be and still count as touching it
+	bool autoGatFillInterior = true;	// also block the area enclosed by the model (the inside of a house)
+	int autoGatCloseGap = 1;		// doorways up to 2*this tiles wide don't let the inside count as open
+	int autoGatType = 1;			// GAT type applied (1 = not walkable), a model's own "force gat tiles" value takes priority
+
 	bool statusText = false;
 	ImGuiID dockspaceId = 0;
 
@@ -340,6 +356,16 @@ public:
 	void showObjectTree();
 	void buildObjectTree(Node* node, Map* map);
 	void showObjectEditToolsWindow();
+	void claudeLink();
+	bool claudeLinkEnabled = true;
+	// live lightmap baking (LiveLightmap.cpp)
+	bool liveLightmap = false;
+	float liveLightmapDelay = 0.1f;	// seconds of quiet after an edit before re-baking
+	int liveLightmapQuality = 1;		// max lightmapper quality used for live bakes
+	struct { Map* map = nullptr; size_t lastStamp = 0; double lastChange = 0; double lastCheck = 0; double lastBakeTime = 0; double lastBakeEnd = 0; bool pending = false; bool wasOn = false; bool baking = false; } liveLightmapState;
+	void liveLightmapUpdate();
+	void liveLightmapFlush(Map* map);	// bake right now if an edit is still waiting (called before saving)
+	bool liveBake(Map* map);
 	void showObjectProperties();
 	void showUndoWindow();
 	void showObjectWindow();

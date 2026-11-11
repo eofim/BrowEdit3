@@ -10,6 +10,7 @@
 #include <browedit/Node.h>
 #include <browedit/actions/GroupAction.h>
 #include <browedit/math/HermiteCurve.h>
+#include <browedit/CinematicDraw.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <GLFW/glfw3.h>
 
@@ -105,7 +106,7 @@ void MapView::postRenderCinematicMode(BrowEdit* browEdit)
 	}
 
 	Gadget::setMatrices(nodeRenderContext.projectionMatrix, nodeRenderContext.viewMatrix);
-	bool canSelectObject = true;
+	bool canSelectObject = !cinedraw::active;
 	float gridSize = gridSizeTranslate;
 	float gridOffset = gridOffsetTranslate;
 	static glm::vec3 originalPos;
@@ -208,6 +209,117 @@ void MapView::postRenderCinematicMode(BrowEdit* browEdit)
 			}
 		}
 		frameIndex++;
+	}
+
+
+	// ---- drawn camera path -------------------------------------------------------------------------
+	if (cinedraw::showPanel && cinedraw::points.size() > 0)
+	{
+		auto drawVerts = [&](const std::vector<glm::vec3>& pts, GLenum mode, glm::vec4 color)
+		{
+			if (pts.empty()) return;
+			std::vector<VertexP3T2N3> v;
+			for (auto& p : pts) v.push_back(VertexP3T2N3(p, glm::vec2(0), glm::vec3(1, 1, 1)));
+			glEnableVertexAttribArray(0); glEnableVertexAttribArray(1); glEnableVertexAttribArray(2);
+			glDisableVertexAttribArray(3); glDisableVertexAttribArray(4);
+			glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(VertexP3T2N3), v[0].data);
+			glVertexAttribPointer(1, 2, GL_FLOAT, false, sizeof(VertexP3T2N3), v[0].data + 3);
+			glVertexAttribPointer(2, 3, GL_FLOAT, false, sizeof(VertexP3T2N3), v[0].data + 5);
+			simpleShader->setUniform(SimpleShader::Uniforms::color, color);
+			simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 0.0f);
+			simpleShader->setUniform(SimpleShader::Uniforms::lightMin, 1.0f);
+			glDrawArrays(mode, 0, (int)v.size());
+		};
+		simpleShader->use();
+		simpleShader->setUniform(SimpleShader::Uniforms::modelMatrix, glm::mat4(1.0f));
+		glDisable(GL_DEPTH_TEST);
+		glLineWidth(2.0f);
+		auto line = cinedraw::curve(12, cinedraw::closedLoop && cinedraw::points.size() >= 3);
+		drawVerts(line, GL_LINE_STRIP, glm::vec4(0.2f, 0.9f, 1.0f, 1.0f));
+		std::vector<glm::vec3> stems, cams, grounds, focusLines;
+		for (size_t i = 0; i < cinedraw::points.size(); i++)
+		{
+			auto& p = cinedraw::points[i];
+			glm::vec3 cam(p.pos.x, cinedraw::camHeight(p), p.pos.z);
+			stems.push_back(p.pos); stems.push_back(cam);
+			if (p.hasFocus) { focusLines.push_back(cam); focusLines.push_back(p.focus); }
+		}
+		drawVerts(stems, GL_LINES, glm::vec4(1.0f, 1.0f, 0.3f, 1.0f));
+		drawVerts(focusLines, GL_LINES, glm::vec4(1.0f, 0.4f, 1.0f, 1.0f));
+		glPointSize(9.0f);
+		for (size_t i = 0; i < cinedraw::points.size(); i++)
+		{
+			auto& p = cinedraw::points[i];
+			bool sel = (int)i == cinedraw::selected;
+			drawVerts({ glm::vec3(p.pos.x, cinedraw::camHeight(p), p.pos.z) }, GL_POINTS, sel ? glm::vec4(1, 0.2f, 0.2f, 1) : glm::vec4(0.3f, 1, 0.3f, 1));
+			if (p.hasFocus) drawVerts({ p.focus }, GL_POINTS, glm::vec4(1.0f, 0.4f, 1.0f, 1.0f));
+		}
+		glEnable(GL_DEPTH_TEST);
+		glLineWidth(1.0f);
+	}
+	if (cinedraw::active && hovered && !ImGui::GetIO().KeyShift && mouse3D.x < 1e30f)
+	{
+		using namespace cinedraw;
+		auto pickDist = [&](const glm::vec3& p)
+		{
+			float d = glm::length(glm::cross(mouseRay.dir, p - mouseRay.origin));
+			return d - glm::max(8.0f, 0.015f * glm::distance(mouseRay.origin, p));
+		};
+		auto nearest = [&]()
+		{
+			int best = -1; float bd = 0;
+			for (size_t i = 0; i < points.size(); i++)
+			{
+				float d = glm::min(pickDist(glm::vec3(points[i].pos.x, camHeight(points[i]), points[i].pos.z)), pickDist(points[i].pos));
+				if (d < bd) { bd = d; best = (int)i; }
+			}
+			return best;
+		};
+		if (ImGui::IsMouseClicked(0))
+		{
+			if (pickFocus && selected >= 0 && selected < (int)points.size())
+			{
+				points[selected].focus = mouse3D + glm::vec3(0, 8, 0);
+				points[selected].hasFocus = true;
+				pickFocus = false;
+				dirty = true;
+			}
+			else
+			{
+				int hit = nearest();
+				if (hit >= 0) { selected = hit; dragging = hit; }
+				else
+				{
+					Point np;
+					np.pos = mouse3D;
+					if (ImGui::GetIO().KeyAlt && selected >= 0 && selected < (int)points.size())
+					{
+						points.insert(points.begin() + selected + 1, np);
+						selected++;
+					}
+					else
+					{
+						points.push_back(np);
+						selected = (int)points.size() - 1;
+					}
+					dirty = true;
+				}
+			}
+		}
+		if (dragging >= 0 && dragging < (int)points.size() && ImGui::IsMouseDown(0) && ImGui::GetIO().MouseDelta.x != 0)
+		{
+			points[dragging].pos = mouse3D;
+			dirty = true;
+		}
+		if (ImGui::IsMouseReleased(0))
+			dragging = -1;
+		if (ImGui::IsMouseReleased(1) && ImGui::GetIO().MouseDragMaxDistanceSqr[1] < 5)
+		{
+			int hit = nearest();
+			if (hit >= 0) { points.erase(points.begin() + hit); selected = -1; dirty = true; }
+		}
+		if (ImGui::IsKeyPressed(GLFW_KEY_ENTER) && !ImGui::GetIO().WantTextInput)
+			active = false;
 	}
 
 

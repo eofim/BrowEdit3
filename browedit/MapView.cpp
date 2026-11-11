@@ -1,6 +1,11 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include <stb/stb_image_write.h>
+#include <filesystem>
+#include <browedit/sprite/SpriteSystem.h>
+#include <browedit/advtex/AdvTex.h>
 #include <Windows.h>
 #include "MapView.h"
+#include <algorithm>
 #include "Map.h"
 #include "BrowEdit.h"
 #include "Node.h"
@@ -152,6 +157,9 @@ void MapView::toolbar(BrowEdit* browEdit)
 
 
 			ImGui::Text("Object render settings");
+			ImGui::Checkbox("Render .str effects", &viewStr);
+			ImGui::Checkbox("Hide .str effects behind models", &strDepthTest);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: models and terrain are drawn in front of .str effects.\nOff: .str effects are always drawn on top (the old behaviour).");
 			browEdit->toolBarToggleButton("viewModels", viewModels ? ICON_VIEW_MODEL_ON : ICON_VIEW_MODEL_OFF, viewModels, "View Models", HotkeyAction::View_Models, browEdit->config.toolbarButtonsViewOptions);
 			ImGui::SameLine();
 			browEdit->toolBarToggleButton("viewEffects", viewEffects ? ICON_VIEW_EFFECT_ON : ICON_VIEW_EFFECT_OFF, viewEffects, "View Effects", HotkeyAction::View_Effects, browEdit->config.toolbarButtonsViewOptions);
@@ -362,6 +370,82 @@ void MapView::toolbar(BrowEdit* browEdit)
 	Gadget::scale = gadgetScale;
 }
 
+std::string MapView::renderMinimap(BrowEdit* browEdit, int size, bool shading, const std::string& rootDir)
+{
+	auto gnd = map->rootNode->getComponent<Gnd>();
+	if (!gnd || gnd->width < 1 || gnd->height < 1)
+		return "No ground to render";
+	size = glm::clamp(size, 64, 4096);
+	const int ss = size * 2 <= 4096 ? 2 : 1;		// rendered twice as large, then averaged down
+	const int rs = size * ss;
+
+	// remember everything the view uses, so the editor looks the same afterwards
+	const int oldW = fbo->getWidth(), oldH = fbo->getHeight(), oldOW = outlineFbo->getWidth(), oldOH = outlineFbo->getHeight();
+	const bool sOrtho = ortho, sFog = viewFog, sGat = viewGat, sGatGat = viewGatGat, sEff = viewEffects, sIcons = viewEffectIcons, sSky = viewSkyMap, sSounds = viewSounds, sLights = viewLights, sShadow = viewLightmapShadow, sColor = viewLightmapColor, sHover = hovered;
+	const glm::vec2 sRot = cameraRot;
+	const float sDist = cameraDistance;
+	const glm::vec3 sCenter = cameraCenter, sBg = browEdit->config.backgroundColor;
+	auto sDelta = deltaCameraMove;
+	auto lubSky = map->rootNode->getComponent<LubSkyMap>();
+	const bool sLubSky = lubSky ? lubSky->isEnabled : false;
+
+	deltaCameraMove.position *= 0.0f; deltaCameraMove.rotation *= 0.0f; deltaCameraMove.distance = 0.0f;
+	outlineFbo->resize(rs, rs);
+	fbo->resize(rs, rs);
+	ortho = true;
+	cameraRot = glm::vec2(90.0f, 0.0f);
+	cameraDistance = 10.0f * (float)std::max(gnd->width, gnd->height);
+	cameraCenter = glm::vec3(5.0f * gnd->width, 0.0f, 5.0f * gnd->height + 10.0f);
+	viewFog = false; viewGat = false; viewGatGat = false; viewEffects = false; viewEffectIcons = false; viewSkyMap = false; viewSounds = false; viewLights = false;
+	viewLightmapShadow = shading; viewLightmapColor = shading;
+	hovered = false;
+	if (lubSky) lubSky->isEnabled = false;
+	browEdit->config.backgroundColor = glm::vec3(1.0f, 0.0f, 1.0f);		// the client's transparent colour
+
+	render(browEdit);
+
+	std::vector<unsigned char> data((size_t)rs * rs * 4);
+	fbo->use();
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+
+	// back to the normal view
+	browEdit->config.backgroundColor = sBg;
+	if (lubSky) lubSky->isEnabled = sLubSky;
+	hovered = sHover;
+	ortho = sOrtho; cameraRot = sRot; cameraDistance = sDist; cameraCenter = sCenter; deltaCameraMove = sDelta;
+	viewFog = sFog; viewGat = sGat; viewGatGat = sGatGat; viewEffects = sEff; viewEffectIcons = sIcons; viewSkyMap = sSky; viewSounds = sSounds; viewLights = sLights; viewLightmapShadow = sShadow; viewLightmapColor = sColor;
+	outlineFbo->resize(oldOW, oldOH);
+	fbo->resize(oldW, oldH);
+
+	std::vector<unsigned char> img((size_t)size * size * 3);
+	for (int y = 0; y < size; y++)
+		for (int x = 0; x < size; x++)
+		{
+			int acc[3] = { 0, 0, 0 };
+			for (int sy = 0; sy < ss; sy++)
+				for (int sx = 0; sx < ss; sx++)
+				{
+					int srcY = rs - 1 - (y * ss + sy);		// GL rows start at the bottom
+					const unsigned char* px = &data[((size_t)srcY * rs + (x * ss + sx)) * 4];
+					for (int c = 0; c < 3; c++) acc[c] += px[c];
+				}
+			for (int c = 0; c < 3; c++) img[((size_t)y * size + x) * 3 + c] = (unsigned char)(acc[c] / (ss * ss));
+		}
+
+	std::string mapName = map->name;
+	auto pos = mapName.find_last_of("\\/");
+	if (pos != std::string::npos) mapName = mapName.substr(pos + 1);
+	pos = mapName.rfind('.');
+	if (pos != std::string::npos) mapName = mapName.substr(0, pos);
+	std::string outDir = (rootDir.empty() ? browEdit->config.ropath : rootDir) + "data\\texture\\\xc0\xaf\xc0\xfa\xc0\xce\xc5\xcd\xc6\xe4\xc0\xcc\xbd\xba\\map";
+	std::error_code ec;
+	std::filesystem::create_directories(outDir, ec);
+	std::string outPath = outDir + "\\" + mapName + ".bmp";
+	if (!stbi_write_bmp(outPath.c_str(), size, size, 3, img.data()))
+		return "Could not write " + outPath;
+	return "Saved " + outPath;
+}
+
 void MapView::render(BrowEdit* browEdit)
 {
 	outlineFbo->bind();
@@ -409,6 +493,82 @@ void MapView::render(BrowEdit* browEdit)
 		auto afterRot = (Rsw::KeyFrameData<Rsw::CameraTarget>*)rsw->cinematicTracks[1].getAfterFrame(timeSelected);
 		auto beforeRot = (Rsw::KeyFrameData<Rsw::CameraTarget>*)rsw->cinematicTracks[1].getBeforeFrame(timeSelected);
 
+		// camera position: clamp before the first / after the last keyframe (the wrap-around of getBefore/AfterFrame made the camera jump)
+		{
+			std::vector<Rsw::KeyFrameData<std::pair<glm::vec3, glm::vec3>>*> pf;
+			for (auto f : rsw->cinematicTracks[0].frames)
+				if (auto p = dynamic_cast<Rsw::KeyFrameData<std::pair<glm::vec3, glm::vec3>>*>(f))
+					pf.push_back(p);
+			if (pf.size() > 0)
+			{
+				std::sort(pf.begin(), pf.end(), [](auto* x, auto* y) { return x->time < y->time; });
+				if (timeSelected >= pf.back()->time)
+					pos = pf.back()->data.first;
+				else if (timeSelected <= pf.front()->time)
+					pos = pf.front()->data.first;
+			}
+		}
+		bool smoothDone = false;
+		// smooth look-at: when every target keyframe is a "look at point", follow a Catmull-Rom curve through the points
+		// (no turn-speed lag and no jump at the keyframes)
+		{
+			std::vector<Rsw::KeyFrameData<Rsw::CameraTarget>*> tf;
+			bool allPoint = true;
+			for (auto f : rsw->cinematicTracks[1].frames)
+				if (auto p = dynamic_cast<Rsw::KeyFrameData<Rsw::CameraTarget>*>(f))
+				{
+					tf.push_back(p);
+					if (p->data.lookAt != Rsw::CameraTarget::LookAt::Point)
+						allPoint = false;
+				}
+			if (allPoint && tf.size() > 0)
+			{
+				std::sort(tf.begin(), tf.end(), [](auto* x, auto* y) { return x->time < y->time; });
+				const bool periodic = tf.size() >= 4 && glm::distance(tf.front()->data.point, tf.back()->data.point) < 0.5f;
+				glm::vec3 lp = tf.front()->data.point;
+				if (timeSelected >= tf.back()->time)
+					lp = tf.back()->data.point;
+				else if (timeSelected > tf.front()->time)
+				{
+					for (size_t i = 0; i + 1 < tf.size(); i++)
+					{
+						if (tf[i]->time <= timeSelected && timeSelected < tf[i + 1]->time)
+						{
+							// cubic Hermite with velocities that account for uneven keyframe spacing, so adding keys never makes it bumpy
+							auto vel = [&](size_t k) {
+								if (periodic && (k == 0 || k + 1 == tf.size()))		// looping cinematic: the last key is the first key again
+								{
+									size_t n = tf.size();
+									float dtt = (tf[1]->time - tf[0]->time) + (tf[n - 1]->time - tf[n - 2]->time);
+									return dtt > 0.00001f ? (tf[1]->data.point - tf[n - 2]->data.point) / dtt : glm::vec3(0.0f);
+								}
+								size_t a = k == 0 ? 0 : k - 1, b = k + 1 < tf.size() ? k + 1 : k;
+								float dtt = tf[b]->time - tf[a]->time;
+								return dtt > 0.00001f ? (tf[b]->data.point - tf[a]->data.point) / dtt : glm::vec3(0.0f);
+							};
+							glm::vec3 p1 = tf[i]->data.point, p2 = tf[i + 1]->data.point;
+							float dt = tf[i + 1]->time - tf[i]->time;
+							float u = dt > 0.00001f ? (timeSelected - tf[i]->time) / dt : 0.0f;
+							float u2 = u * u, u3 = u2 * u;
+							lp = (2 * u3 - 3 * u2 + 1) * p1 + (u3 - 2 * u2 + u) * dt * vel(i) + (-2 * u3 + 3 * u2) * p2 + (u3 - u2) * dt * vel(i + 1);
+							break;
+						}
+					}
+				}
+				glm::vec3 d = lp - pos;
+				if (glm::length(d) > 0.0001f)
+				{
+					nodeRenderContext.viewMatrix = glm::mat4(1.0f);
+					cinematicCameraDirection = glm::conjugate(glm::quatLookAt(glm::normalize(d), glm::vec3(0, 1, 0)));
+					nodeRenderContext.viewMatrix = nodeRenderContext.viewMatrix * glm::toMat4(cinematicCameraDirection);
+					nodeRenderContext.viewMatrix = glm::translate(nodeRenderContext.viewMatrix, -pos);
+					cinematicLastCameraPosition = pos;
+					smoothDone = true;
+				}
+			}
+		}
+		if (!smoothDone)
+		{
 		nodeRenderContext.viewMatrix = glm::mat4(1.0f);
 		glm::quat targetRot = cinematicCameraDirection;
 		glm::quat lastRot = cinematicCameraDirection;
@@ -451,6 +611,7 @@ void MapView::render(BrowEdit* browEdit)
 		nodeRenderContext.viewMatrix = nodeRenderContext.viewMatrix * glm::toMat4(cinematicCameraDirection);
 		nodeRenderContext.viewMatrix = glm::translate(nodeRenderContext.viewMatrix, -pos);
 		cinematicLastCameraPosition = pos;
+		}
 	}
 	else
 	{
@@ -547,6 +708,8 @@ void MapView::render(BrowEdit* browEdit)
 		{
 			if (r->node->getComponent<RswModel>())
 				r->enabled = viewModels;
+			if (auto strR = dynamic_cast<StrRenderer*>(r))
+				strR->enabled = viewStr && viewEffects;
 			if (r->node->getComponent<RswEffect>())
 			{
 				if (dynamic_cast<BillboardRenderer*>(r))
@@ -697,6 +860,9 @@ void MapView::render(BrowEdit* browEdit)
 			}
 		}
 	}
+	sprite::System::instance().render(this, browEdit);
+	advtex::frame(this, browEdit);
+
 	if (skyTexture)
 	{
 		simpleShader->use();

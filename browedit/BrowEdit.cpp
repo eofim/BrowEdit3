@@ -1,3 +1,5 @@
+#include <browedit/sprite/SpriteSystem.h>
+#include <browedit/advtex/AdvTex.h>
 #include "BrowEdit.h"
 #include "Version.h"
 #include <glad/gl.h>
@@ -17,11 +19,13 @@
 #include <browedit/HotkeyRegistry.h>
 #include <browedit/gl/FBO.h>
 #include <browedit/gl/Texture.h>
+#include <browedit/CliffTool.h>
 #include <browedit/NodeRenderer.h>
 #include <browedit/Node.h>
 #include <browedit/Gadget.h>
 #include <browedit/Lightmapper.h>
 #include <browedit/ModelEditor.h>
+#include <browedit/ModelVariants.h>
 #include <browedit/components/Rsw.h>
 #include <browedit/components/Gat.h>
 #include <browedit/components/Gnd.h>
@@ -226,6 +230,8 @@ void BrowEdit::run()
 
 		menuBar();
 		toolbar();
+		try { claudeLink(); } catch (...) { claudeLinkEnabled = false; }
+		try { liveLightmapUpdate(); } catch (...) { liveLightmap = false; }
 
 		if (windowData.configVisible)
 			windowData.configVisible = !config.showWindow(this);
@@ -246,7 +252,22 @@ void BrowEdit::run()
 		HotkeyRegistry::showHotkeyPopup(this);
 
 		openWindow();
+		for (auto& changedFile : util::FileIO::pollChanges())	// live file reading: the tree is already updated, reload images that changed on disk
+		{
+			std::string l = changedFile;
+			for (auto& c : l) { if (c == '/') c = '\\'; c = (char)tolower((unsigned char)c); }
+			if (l.size() < 4 || (l.substr(l.size() - 4) != ".bmp" && l.substr(l.size() - 4) != ".tga" && l.substr(l.size() - 4) != ".png" && l.substr(l.size() - 4) != ".jpg" && l.substr(l.size() - 4) != ".gif"))
+				continue;
+			auto same = [&](gl::Texture* t) {
+				std::string f = t->fileName;
+				for (auto& c : f) { if (c == '/') c = '\\'; c = (char)tolower((unsigned char)c); }
+				return f == l;
+			};
+			for (auto t : util::ResourceManager<gl::Texture>::getAll()) if (same(t)) t->reload();
+			for (auto t : util::ResourceManager<gl::TexturePoT>::getAll()) if (same(t)) t->reload();
+		}
 		showExportWindow();
+		advtex::showSavePrompt(this);
 		if (windowData.undoVisible)
 			showUndoWindow();
 		if (windowData.objectWindowVisible && editMode == EditMode::Object) {
@@ -266,7 +287,11 @@ void BrowEdit::run()
 			showTextureManageWindow();
 		}
 		if (editMode == EditMode::Height)
+		{
 			showHeightWindow();
+			if (heightDoodle)
+				showTextureManageWindow();
+		}
 		if (editMode == EditMode::Gat)
 			showGatWindow();
 		if (editMode == EditMode::Wall)
@@ -286,6 +311,11 @@ void BrowEdit::run()
 			showShadowEditWindow();
 		if (editMode == EditMode::SkyMap)
 			showSkyMapEditWindow();
+		if (editMode == EditMode::Sprite)
+			sprite::System::instance().showWindows(this);
+		if (editMode == EditMode::AdvTexture)
+			advtex::showWindow(this);
+		modelvariants::showWindow(this);
 
 		if (windowData.hotkeyEditWindowVisible)
 			showHotkeyEditorWindow();
@@ -611,6 +641,13 @@ void BrowEdit::showMapWindow(MapView& mapView, float deltaTime)
 					mapView.postRenderCinematicMode(this);
 				else if (editMode == EditMode::Water)
 					mapView.postRenderWaterMode(this);
+				else if (editMode == EditMode::AdvTexture)
+					{
+						if (!modelvariants::postRender(&mapView, this))
+							advtex::postRender(&mapView, this);
+					}
+				else if (editMode == EditMode::Sprite)
+					sprite::System::instance().postRender(&mapView, this);
 			}
 
 
@@ -620,7 +657,7 @@ void BrowEdit::showMapWindow(MapView& mapView, float deltaTime)
 		ImTextureID id = (ImTextureID)((long long)mapView.fbo->texid[0]); //TODO: remove cast for 32bit
 		ImGui::ImageButton(id, size, ImVec2(0,1), ImVec2(1,0), 0, ImVec4(0,0,0,1), ImVec4(1,1,1,1));
 		//ImGui::Image(id, size, ImVec2(0, 1), ImVec2(1, 0));
-		mapView.hovered = ImGui::IsItemHovered() || ImGui::IsItemClicked();
+		mapView.hovered = ImGui::IsItemHovered((sprite::System::instance().browserDrag || sprite::System::instance().browserDrop) ? ImGuiHoveredFlags_AllowWhenBlockedByActiveItem : 0) || ImGui::IsItemClicked();
 
 		if (&mapView == activeMapView)
 		{
@@ -680,6 +717,7 @@ void fixBackup(const std::string& fileName, const std::string& backupfileName)
 
 void BrowEdit::saveMap(Map* map)
 {
+	liveLightmapFlush(map);
 	if(config.recalculateQuadtreeOnSave)
 		map->recalculateQuadTree(this);
 
@@ -719,6 +757,10 @@ void BrowEdit::saveMap(Map* map)
 	}
 
 
+	cliff::saveCave(map, this);
+	if (!advtex::onSave(map, this))	// asks "build the baked textures?" first; the save is repeated with the answer
+		return;
+
 	if (config.backup)
 	{
 		fixBackup(rswName, backupRswName);
@@ -733,6 +775,7 @@ void BrowEdit::saveMap(Map* map)
 	map->rootNode->getComponent<Gat>()->save(gatName);
 	map->rootNode->getComponent<LubSkyMap>()->save(mapName, this);
 
+	sprite::System::instance().save(map, this);
 	map->changed = false;
 }
 

@@ -544,6 +544,7 @@ void BrowEdit::showObjectWindow()
 								newNode->addComponent(new LubRenderer());
 							}
 
+							attachEffectPreview(newNode);
 							newNodes.push_back(std::pair<Node*, glm::vec3>(newNode, glm::vec3(0, 0, 0)));
 							newNodesCenter = glm::vec3(0, 0, 0);
 							newNodePlacement = BrowEdit::Ground;

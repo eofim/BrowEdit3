@@ -15,3 +15,6 @@ data/texture/effect
 data/texture/skyboxes
 backups
 /Patcher_run
+tools/mapgen/examples/out/
+__pycache__/
+tools/mapgen/examples/out_test/

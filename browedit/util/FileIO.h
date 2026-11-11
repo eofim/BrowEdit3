@@ -51,6 +51,7 @@ namespace util
 			void listFiles(const std::string& directory, std::vector<std::string>&) override;
 			void listAllFiles(std::vector<std::string>&) override;
 			virtual std::string toString() override;
+			const std::string& dir() const { return directory; }
 		};
 
 		static std::vector<Source*> sources;
@@ -62,6 +63,11 @@ namespace util
 		static void end();
 
 		static void reload(const std::string&); // to reload a path
+
+		// Live file watching: new / removed / changed files in the directory sources show up in the tree (pickers) without a restart.
+		static void startWatching();
+		// call every frame from the main thread: updates the tree and returns the relative paths of files that were added or changed
+		static std::vector<std::string> pollChanges();
 
 		// FileIO for opening from GRF
 		static std::istream* open(const std::string& fileName);

@@ -234,6 +234,8 @@ void Node::addComponentsFromJson(const nlohmann::json& data)
 			this->addComponent(lubEffect);
 			this->addComponent(new LubRenderer());
 		}
+		if (c["type"] == "streffect" && this->getComponent<RswEffect>() && this->getComponent<RswEffect>()->id != RswEffect::EffectType::Ez2Str)
+			continue;	// previews of normal effects are rebuilt by attachEffectPreview
 		if (c["type"] == "streffect")
 		{
 			auto strEffect = new StrEffect();
@@ -264,6 +266,7 @@ void Node::addComponentsFromJson(const nlohmann::json& data)
 			this->addComponent(new CubeCollider(5));
 		}
 	}
+	attachEffectPreview(this);	// sprite previews are not serialized, rebuild them after paste
 }
 
 

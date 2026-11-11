@@ -12,6 +12,9 @@
 #include <browedit/components/LubRenderer.h>
 #include <browedit/components/LubWindRenderer.h>
 #include <browedit/components/StrRenderer.h>
+#include <browedit/components/SprRenderer.h>
+#include <browedit/components/PortalRenderer.h>
+#include <browedit/components/FxRenderer.h>
 #include <browedit/components/EvilsPawRenderer.h>
 #include <browedit/actions/AddComponentAction.h>
 #include <browedit/actions/RemoveComponentAction.h>
@@ -522,5 +525,181 @@ void EvilsPawEffect::buildImGuiMulti(BrowEdit* browEdit, const std::vector<Node*
 		util::DragFloat3Multi<EvilsPawEffect>(browEdit, browEdit->activeMapView->map, lubEffects, "offsetPos", [](EvilsPawEffect* e) {return &e->offsetPos; }, 0.1f, 0, 0);
 		util::DragFloatMulti<EvilsPawEffect>(browEdit, browEdit->activeMapView->map, lubEffects, "size", [](EvilsPawEffect* e) {return &e->size; }, 0.1f, 0, 0);
 		util::DragFloatMulti<EvilsPawEffect>(browEdit, browEdit->activeMapView->map, lubEffects, "speed", [](EvilsPawEffect* e) {return &e->speed; }, 0.1f, 0, 0);
+	}
+}
+
+// ---- effect preview: render the parts of normal client effect ids (data/effectparts.json, generated from EffectTable.json) ----
+static std::map<int, nlohmann::json>& effectTable()
+{
+	static std::map<int, nlohmann::json> table;
+	static bool loaded = false;
+	if (!loaded)
+	{
+		loaded = true;
+		try {
+			auto j = util::FileIO::getJson("data\\effectparts.json");
+			for (auto it = j.begin(); it != j.end(); ++it)
+				if (it.value().is_array())
+					table[std::stoi(it.key())] = it.value();
+		}
+		catch (...) { std::cerr << "effectparts.json not loaded" << std::endl; }
+	}
+	return table;
+}
+
+// Files a client effect id needs (for the map export): (path, type) pairs below data\, only files that exist
+void collectEffectAssets(int id, std::vector<std::pair<std::string, std::string>>& out)
+{
+	auto exists = [](const std::string& f) { return util::FileIO::exists(f); };
+	auto add = [&](const std::string& path, const char* type) { if (exists(path)) out.emplace_back(path, type); };
+	auto slashes = [](std::string f) { for (auto& c : f) if (c == '/') c = '\\'; return f; };
+	if (id == 44) add("data\\texture\\effect\\smoke.tga", "effectTexture");
+	auto& table = effectTable();
+	auto it = table.find(id);
+	if (it == table.end())
+		return;
+	for (auto& part : it->second)
+	{
+		std::string type = part.value("type", "");
+		auto str = [&](const char* k) { return part.contains(k) && part[k].is_string() ? part[k].get<std::string>() : std::string(); };
+		std::string file = str("file");
+		if (!str("wav").empty())
+		{
+			std::string w = slashes(str("wav"));
+			for (const char* ext : { "", ".wav" })
+				if (exists("data\\wav\\" + w + ext)) { out.emplace_back("data\\wav\\" + w + ext, "sound"); break; }
+		}
+		if (type == "STR")
+		{
+			int lo = 1, hi = 1;
+			if (part.contains("rand") && part["rand"].is_array() && part["rand"].size() > 0 && part["rand"][0].is_number())
+			{
+				lo = hi = part["rand"][0].get<int>();
+				if (part["rand"].size() > 1 && part["rand"][1].is_number()) hi = std::min(part["rand"][1].get<int>(), lo + 20);
+			}
+			for (int r = lo; r <= hi; r++)
+			{
+				std::string f = file;
+				for (size_t p; (p = f.find("%d")) != std::string::npos;) f.replace(p, 2, std::to_string(r));
+				f = slashes(f);
+				std::string cands[2] = { f, f.rfind("effect\\", 0) == 0 ? f.substr(7) : f };
+				for (auto& c : cands)
+					if (exists("data\\texture\\effect\\" + c + ".str")) { out.emplace_back("data\\texture\\effect\\" + c + ".str", "str"); break; }
+			}
+		}
+		else if (type == "SPR" || (type == "3D" && file.empty() && !str("spriteName").empty()))
+		{
+			std::string name = util::utf8_to_iso_8859_1(type == "SPR" ? file : str("spriteName"));
+			std::string base = "data\\sprite\\\xC0\xCC\xC6\xD1\xC6\xAE\\" + name;
+			add(base + ".spr", "sprite");
+			add(base + ".act", "sprite");
+		}
+		else if (type == "2D" || type == "3D" || type == "CYLINDER")
+		{
+			std::string name = slashes(type == "CYLINDER" ? str("textureName") : file);
+			std::vector<std::string> bases = { name };
+			if (name.rfind("effect\\", 0) == 0) bases.push_back(name.substr(7));
+			bool done = false;
+			for (auto& b : bases)
+				for (const char* ext : { "", ".tga", ".bmp", ".png", ".jpg" })
+				{
+					std::string path = "data\\texture\\effect\\" + b + ext;
+					if (!done && !name.empty() && exists(path)) { out.emplace_back(path, "effectTexture"); done = true; }
+				}
+		}
+	}
+}
+
+void attachEffectPreview(Node* node)
+{
+	auto& table = effectTable();
+	auto e = node->getComponent<RswEffect>();
+	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<PortalEffect>() || node->getComponent<FxEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
+		return;
+	if (e->id == 45)	// ripple rings and floating lights, drawn from code by the client
+	{
+		node->addComponent(new PortalEffect());
+		node->addComponent(new PortalRenderer());
+		return;
+	}
+	if (e->id == 44)	// EF_SMOKE is drawn by client code, not from a file: approximate it with a soft smoke emitter
+	{
+		auto le = new LubEffect();
+		le->texture = "effect\\smoke.tga";
+		le->gravity = glm::vec3(0, -1.5f, 0);
+		le->color = glm::vec4(0.8f, 0.8f, 0.8f, 0.5f);
+		le->rate = glm::vec2(2, 4);
+		le->size = glm::vec2(2, 5);
+		le->life = glm::vec2(2, 4);
+		le->scale = glm::vec2(1, 1);
+		le->speed = 0.3f;
+		le->srcmode = 5;
+		le->destmode = 6;
+		le->maxcount = 20;
+		le->zenable = 1;
+		le->eternity = 0;
+		node->addComponent(le);
+		node->addComponent(new LubRenderer());
+		return;
+	}
+	auto it = table.find(e->id);
+	if (it == table.end())
+		return;
+	for (auto& part : it->second)
+	{
+		std::string type = part.value("type", "");
+		auto str = [&](const char* k) { return part.contains(k) && part[k].is_string() ? part[k].get<std::string>() : std::string(); };
+		std::string file = str("file");
+		if (type == "STR")
+		{
+			std::string f = file;
+			int r = 1;
+			if (part.contains("rand") && part["rand"].is_array() && part["rand"].size() > 0 && part["rand"][0].is_number())
+				r = part["rand"][0].get<int>();
+			for (size_t p; (p = f.find("%d")) != std::string::npos;)
+				f.replace(p, 2, std::to_string(r));
+			for (auto& c : f) if (c == '/') c = '\\';
+			std::string candidates[2] = { f, f.rfind("effect\\", 0) == 0 ? f.substr(7) : f };
+			for (auto& cand : candidates)
+				if (util::FileIO::exists("data\\texture\\effect\\" + cand + ".str"))
+				{
+					auto se = new StrEffect();
+					se->str = util::iso_8859_1_to_utf8(cand + ".str");
+					auto sr = new StrRenderer();
+					sr->setStrEffect(se);
+					node->addComponent(se);
+					node->addComponent(sr);
+					break;
+				}
+		}
+		else if (type == "SPR" || (type == "3D" && file.empty() && !str("spriteName").empty()))
+		{
+			std::string name = util::utf8_to_iso_8859_1(type == "SPR" ? file : str("spriteName"));
+			std::string base = "data\\sprite\\\xC0\xCC\xC6\xD1\xC6\xAE\\" + name;
+			if (util::FileIO::exists(base + ".spr") && util::FileIO::exists(base + ".act"))
+			{
+				auto se = new SprEffect();
+				se->file = name;
+				auto sr = new SprRenderer();
+				sr->setSprEffect(se);
+				node->addComponent(se);
+				node->addComponent(sr);
+			}
+		}
+		else if (type == "2D" || type == "3D" || type == "CYLINDER")
+		{
+			auto fe = new FxEffect();
+			fe->type = type;
+			fe->texture = type == "CYLINDER" ? str("textureName") : file;
+			for (auto kv = part.begin(); kv != part.end(); ++kv)
+			{
+				if (kv.value().is_number()) fe->n[kv.key()] = kv.value().get<float>();
+				else if (kv.value().is_boolean()) fe->n[kv.key()] = kv.value().get<bool>() ? 1.0f : 0.0f;
+			}
+			auto fr = new FxRenderer();
+			fr->setEffect(fe);
+			node->addComponent(fe);
+			node->addComponent(fr);
+		}
 	}
 }

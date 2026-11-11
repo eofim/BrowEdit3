@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ master ]
 
+# The Release step needs this, forks don't get write access for the token by default
+permissions:
+  contents: write
+
 env:
   # Path to the solution file relative to the root of the project.
   SOLUTION_FILE_PATH: .
@@ -28,7 +32,8 @@ jobs:
     - name: Fix version
       shell: cmd
       run: |
-        echo #define VERSION ${{ github.run_number }}>Version.h
+        rem keep the space before the redirect below, a single digit right in front of it is read as a stream number and the version is lost
+        echo #define VERSION ${{ github.run_number }} >Version.h
         echo.>>Version.h
         type Version.h
 
@@ -36,7 +41,13 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       # Add additional options to the MSBuild command line here (like platform or verbosity level).
       # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
-      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
+      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}} /flp:logfile=build_errors.log
+
+    - name: Report build errors
+      if: failure()
+      shell: pwsh
+      run: |
+        if (Test-Path build_errors.log) { Select-String -Path build_errors.log -Pattern ' error [A-Z]+[0-9]+' | ForEach-Object { $_.Line.Trim() } | Select-Object -Unique | Select-Object -First 15 | ForEach-Object { Write-Host "::error::$($_ -replace '%','%25')" } }
     
     - name: BuildPackage
       run: |

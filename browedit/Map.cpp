@@ -1,3 +1,6 @@
+#include <browedit/sprite/SpriteSystem.h>
+#include <browedit/advtex/AdvTex.h>
+#include <browedit/CliffTool.h>
 #include <Windows.h>
 #include <shellapi.h>
 #include <browedit/Map.h>
@@ -11,7 +14,9 @@
 #include <browedit/actions/TileNewAction.h>
 #include <browedit/actions/CubeTileChangeAction.h>
 #include <browedit/actions/TilePropertyChangeAction.h>
+#include <browedit/actions/GatTileChangeAction.h>
 #include <browedit/components/Rsw.h>
+#include <browedit/components/RsmRenderer.h>
 #include <browedit/components/Gnd.h>
 #include <browedit/components/Gat.h>
 #include <browedit/components/LubSkyMap.h>
@@ -29,6 +34,13 @@ using json = nlohmann::json;
 #include <stb/stb_image_write.h>
 #include <stb/stb_image.h>
 #include <set>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <unordered_map>
+#include <map>
+#include <set>
+#include <browedit/actions/AutoGatFootprintAction.h>
 #include <iostream>
 #include <thread>
 #include <mutex>
@@ -63,6 +75,9 @@ Map::Map(const std::string& name, int width, int height, BrowEdit* browEdit) : n
 
 Map::~Map()
 {
+	sprite::System::instance().forget(this);
+	advtex::forget(this);
+	cliff::forgetCave(this);
 	for (auto u : undoStack)
 		delete u;
 	for (auto u : redoStack)
@@ -200,6 +215,7 @@ void Map::invertScale(int axis, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 }
 void Map::nudgeSelection(int axis, int sign, BrowEdit* browEdit)
@@ -219,6 +235,7 @@ void Map::nudgeSelection(int axis, int sign, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 }
 
@@ -252,6 +269,7 @@ void Map::rotateSelection(int axis, int sign, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 
 }
@@ -274,6 +292,7 @@ void Map::randomRotateSelection(int axis, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 
 }
@@ -295,6 +314,7 @@ void Map::flipSelection(int axis, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 }
 
@@ -320,6 +340,7 @@ void Map::setSelectedItemsToFloorHeight(BrowEdit* browEdit)
 			}
 		}
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 
 }
@@ -419,6 +440,7 @@ void Map::deleteSelection(BrowEdit* browEdit)
 		auto ga = new GroupAction();
 		for (auto n : selectedNodes)
 			ga->addAction(new DeleteObjectAction(n));
+		autoGatFollow(selectedNodes, browEdit, ga, true);
 		doAction(ga, browEdit);
 	}
 }
@@ -472,6 +494,360 @@ void Map::pasteSelection(BrowEdit* browEdit)
 	catch (...) {
 		std::cerr << "!!!!!!!!!!! Some sort of error occurred???" << std::endl;
 	};
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// Auto-GAT
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+	// Does the 2D triangle overlap the axis aligned rectangle? Touching does not count.
+	// Separating axis test, which also works for triangles that are squashed into a line (vertical faces).
+	bool triangleOverlapsRect(const glm::vec2* tri, const glm::vec2& rMin, const glm::vec2& rMax)
+	{
+		for (int axis = 0; axis < 2; axis++)
+		{
+			float tMin = glm::min(tri[0][axis], glm::min(tri[1][axis], tri[2][axis]));
+			float tMax = glm::max(tri[0][axis], glm::max(tri[1][axis], tri[2][axis]));
+			if (tMax <= rMin[axis] || tMin >= rMax[axis])
+				return false;
+		}
+
+		const glm::vec2 corners[4] = { rMin, glm::vec2(rMax.x, rMin.y), glm::vec2(rMin.x, rMax.y), rMax };
+		for (int i = 0; i < 3; i++)
+		{
+			glm::vec2 edge = tri[(i + 1) % 3] - tri[i];
+			glm::vec2 normal(-edge.y, edge.x);
+			float len = glm::length(normal);
+			if (len < 1e-6f)
+				continue;
+			normal /= len;
+
+			float tMin = std::numeric_limits<float>::max(), tMax = -std::numeric_limits<float>::max();
+			float cMin = std::numeric_limits<float>::max(), cMax = -std::numeric_limits<float>::max();
+			for (int k = 0; k < 3; k++)
+			{
+				float d = glm::dot(normal, tri[k]);
+				tMin = glm::min(tMin, d);
+				tMax = glm::max(tMax, d);
+			}
+			for (int k = 0; k < 4; k++)
+			{
+				float d = glm::dot(normal, corners[k]);
+				cMin = glm::min(cMin, d);
+				cMax = glm::max(cMax, d);
+			}
+			if (tMax <= cMin || tMin >= cMax)
+				return false;
+		}
+		return true;
+	}
+
+	// Collects the faces of a model in world space, the same way RswModelCollider does, but without touching its BVH
+	void collectWorldTriangles(Rsm::Mesh* mesh, RsmRenderer* renderer, const glm::mat4& matrix, std::vector<std::array<glm::vec3, 3>>& out)
+	{
+		if (!mesh || mesh->index < 0 || mesh->index >= (int)renderer->renderInfo.size())
+			return;
+
+		glm::mat4 meshMatrix = matrix * renderer->renderInfo[mesh->index].matrix;
+		for (const auto& face : mesh->faces)
+		{
+			std::array<glm::vec3, 3> tri;
+			bool valid = true;
+			for (int i = 0; i < 3; i++)
+			{
+				if (face.vertexIds[i] >= mesh->vertices.size())
+				{
+					valid = false;
+					break;
+				}
+				tri[i] = glm::vec3(meshMatrix * glm::vec4(mesh->vertices[face.vertexIds[i]], 1.0f));
+			}
+			if (valid)
+				out.push_back(tri);
+		}
+
+		for (auto child : mesh->children)
+			collectWorldTriangles(child, renderer, matrix, out);
+	}
+}
+
+namespace
+{
+	// same matrix the renderer builds for a model, so it can be used before the renderer has had a chance to refresh its cache
+	glm::mat4 autoGatModelMatrix(Gnd* gnd, RswObject* rswObject, Rsm* rsm)
+	{
+		glm::mat4 m(1.0f);
+		m = glm::scale(m, glm::vec3(1, 1, -1));
+		m = glm::translate(m, glm::vec3(5 * gnd->width + rswObject->position.x, -rswObject->position.y, -10 - 5 * gnd->height + rswObject->position.z));
+		m = glm::rotate(m, -glm::radians(rswObject->rotation.z), glm::vec3(0, 0, 1));
+		m = glm::rotate(m, -glm::radians(rswObject->rotation.x), glm::vec3(1, 0, 0));
+		m = glm::rotate(m, glm::radians(rswObject->rotation.y), glm::vec3(0, 1, 0));
+		m = glm::scale(m, glm::vec3(rswObject->scale.x, -rswObject->scale.y, rswObject->scale.z));
+		if (rsm->version < 0x0202)
+			m = glm::translate(m, glm::vec3(-rsm->realbbrange.x, rsm->realbbmin.y, -rsm->realbbrange.z));
+		else
+			m = glm::scale(m, glm::vec3(1, -1, 1));
+		return m;
+	}
+}
+
+// Keeps the GAT in sync with the models: every model remembers which tiles it blocked (and what they were before),
+// so moving, rotating, scaling or deleting a model frees its old tiles and blocks the new ones. Tiles that were edited
+// by hand since, or that another model also blocks, are left alone.
+void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga, bool removed, bool useMatrixCache, bool fillInterior, int closeGap)
+{
+	auto gnd = rootNode->getComponent<Gnd>();
+	auto gat = rootNode->getComponent<Gat>();
+	if (!gnd || !gat || !ga)
+		return;
+
+	typedef std::pair<int, int> TileKey;
+
+	// who currently owns which tile (all models in the map)
+	std::map<TileKey, std::map<RswModel*, RswModel::AutoGatTile>> owners;
+	rootNode->traverse([&](Node* n)
+	{
+		auto m = n->getComponent<RswModel>();
+		if (m)
+			for (const auto& t : m->autoGatTiles)
+				owners[{t.x, t.y}][m] = t;
+	});
+
+	// gat values as they will be once the actions are performed
+	std::map<TileKey, int> virtualValue;
+	auto valueOf = [&](const TileKey& k) -> int
+	{
+		auto it = virtualValue.find(k);
+		return it != virtualValue.end() ? it->second : gat->cubes[k.first][k.second]->gatType;
+	};
+
+	// terrain height below a world position, cached because most vertices are shared between faces
+	std::unordered_map<long long, float> terrainCache;
+	auto terrainHeightAt = [&](const glm::vec3& p) -> float // NaN when unknown
+	{
+		long long key = (static_cast<long long>(static_cast<int>(std::lround(p.x * 20.0f))) << 32) |
+			static_cast<unsigned int>(static_cast<int>(std::lround(p.z * 20.0f)));
+		auto it = terrainCache.find(key);
+		if (it != terrainCache.end())
+			return it->second;
+
+		float result = std::numeric_limits<float>::quiet_NaN();
+		glm::ivec2 tile((int)glm::floor(p.x / 5.0f), gat->height - (int)glm::floor(p.z / 5.0f) + 1);
+		if (gat->inMap(tile))
+		{
+			math::Ray ray(glm::vec3(p.x, glm::max(1000.0f, p.y + 100.0f), p.z), glm::vec3(0, -1, 0));
+			auto hit = gnd->rayCast(ray, true, tile.x / 2 - 2, tile.y / 2 - 2, tile.x / 2 + 2, tile.y / 2 + 2);
+			if (hit.y > 100000 || hit.y < -100000)
+				hit = gnd->rayCast(ray, true, tile.x / 2 - 6, tile.y / 2 - 6, tile.x / 2 + 6, tile.y / 2 + 6);
+			if (!(hit.y > 100000 || hit.y < -100000))
+				result = hit.y;
+		}
+		terrainCache[key] = result;
+		return result;
+	};
+
+	for (auto node : nodes)
+	{
+		if (!node)
+			continue;
+
+		node->traverse([&](Node* n)
+		{
+			auto rswModel = n->getComponent<RswModel>();
+			auto rswObject = n->getComponent<RswObject>();
+			auto rsm = n->getComponent<Rsm>();
+			auto rsmRenderer = n->getComponent<RsmRenderer>();
+			if (!rswModel || !rswObject || !rsm || !rsmRenderer || !rsm->loaded || rsm->rootMesh == nullptr)
+				return;
+
+			int gatType = rswModel->gatType > -1 ? rswModel->gatType : defaultGatType;
+
+			// footprint of the model: all tiles its ground contact area overlaps
+			std::set<TileKey> footprint;
+			if (!removed)
+			{
+				std::vector<std::array<glm::vec3, 3>> triangles;
+				glm::mat4 matrix = useMatrixCache ? rsmRenderer->matrixCache : autoGatModelMatrix(gnd, rswObject, rsm);
+				collectWorldTriangles(rsm->rootMesh, rsmRenderer, matrix, triangles);
+
+				const float margin = 0.05f; // so a model that is exactly aligned to the grid doesn't spill into its neighbours
+				for (const auto& tri : triangles)
+				{
+					// only faces that touch the ground: at least one corner close to (or below) the terrain under it
+					bool touchesGround = false;
+					for (int i = 0; i < 3 && !touchesGround; i++)
+					{
+						float ground = terrainHeightAt(tri[i]);
+						if (!std::isnan(ground) && tri[i].y <= ground + bandHeight)
+							touchesGround = true;
+					}
+					if (!touchesGround)
+						continue;
+
+					// project onto the ground plane and collect every GAT tile it overlaps
+					glm::vec2 flat[3] = { glm::vec2(tri[0].x, tri[0].z), glm::vec2(tri[1].x, tri[1].z), glm::vec2(tri[2].x, tri[2].z) };
+					glm::vec2 lo = glm::min(flat[0], glm::min(flat[1], flat[2]));
+					glm::vec2 hi = glm::max(flat[0], glm::max(flat[1], flat[2]));
+
+					int tileXMin = (int)glm::floor(lo.x / 5.0f);
+					int tileXMax = (int)glm::floor(hi.x / 5.0f);
+					int tileYMin = gat->height - (int)glm::floor(hi.y / 5.0f) + 1;
+					int tileYMax = gat->height - (int)glm::floor(lo.y / 5.0f) + 1;
+
+					for (int tx = glm::max(tileXMin, 0); tx <= glm::min(tileXMax, gat->width - 1); tx++)
+					{
+						for (int ty = glm::max(tileYMin, 0); ty <= glm::min(tileYMax, gat->height - 1); ty++)
+						{
+							if (footprint.count({ tx, ty }) > 0)
+								continue;
+
+							// tile bounds in world space, matching Gat::getPos
+							glm::vec2 rMin(5.0f * tx + margin, 5.0f * gat->height - 5.0f * ty + 5.0f + margin);
+							glm::vec2 rMax(5.0f * tx + 5.0f - margin, 5.0f * gat->height - 5.0f * ty + 10.0f - margin);
+							if (triangleOverlapsRect(flat, rMin, rMax))
+								footprint.insert({ tx, ty });
+						}
+					}
+				}
+			}
+
+
+			// fill the area the walls enclose (the inside of a house): close small gaps like doorways, then everything
+			// that can't be reached from outside the model is blocked too (the doorway itself included)
+			if (fillInterior && !footprint.empty())
+			{
+				int r = glm::clamp(closeGap, 0, 3);
+				int pad = r + 1;
+				int minX = footprint.begin()->first, maxX = minX, minY = footprint.begin()->second, maxY = minY;
+				for (const auto& t : footprint)
+				{
+					minX = glm::min(minX, t.first); maxX = glm::max(maxX, t.first);
+					minY = glm::min(minY, t.second); maxY = glm::max(maxY, t.second);
+				}
+				int x0 = minX - pad, y0 = minY - pad;
+				int W = maxX - minX + 1 + 2 * pad, H = maxY - minY + 1 + 2 * pad;
+				std::vector<char> solid((size_t)W * H, 0);
+				for (const auto& t : footprint)
+					solid[(size_t)(t.second - y0) * W + (t.first - x0)] = 1;
+
+				auto morph = [&](const std::vector<char>& in, bool dilate)
+				{
+					std::vector<char> out((size_t)W * H, 0);
+					for (int y = 0; y < H; y++)
+						for (int x = 0; x < W; x++)
+						{
+							bool any = false, all = true;
+							for (int dy = -r; dy <= r; dy++)
+								for (int dx = -r; dx <= r; dx++)
+								{
+									int xx = x + dx, yy = y + dy;
+									bool v = xx >= 0 && yy >= 0 && xx < W && yy < H && in[(size_t)yy * W + xx];
+									any = any || v;
+									all = all && v;
+								}
+							out[(size_t)y * W + x] = dilate ? any : all;
+						}
+					return out;
+				};
+				std::vector<char> closed = r > 0 ? morph(morph(solid, true), false) : solid;
+
+				// flood the outside, starting from the padded border (which is always empty)
+				std::vector<char> outside((size_t)W * H, 0);
+				std::vector<int> stack = { 0 };
+				outside[0] = 1;
+				while (!stack.empty())
+				{
+					int i = stack.back(); stack.pop_back();
+					int x = i % W, y = i / W;
+					const int nx[4] = { x - 1, x + 1, x, x }, ny[4] = { y, y, y - 1, y + 1 };
+					for (int k = 0; k < 4; k++)
+					{
+						if (nx[k] < 0 || ny[k] < 0 || nx[k] >= W || ny[k] >= H)
+							continue;
+						int j = ny[k] * W + nx[k];
+						if (!outside[j] && !closed[j])
+						{
+							outside[j] = 1;
+							stack.push_back(j);
+						}
+					}
+				}
+				for (int y = 0; y < H; y++)
+					for (int x = 0; x < W; x++)
+					{
+						size_t i = (size_t)y * W + x;
+						if (!solid[i] && !outside[i] && gat->inMap(glm::ivec2(x + x0, y + y0)))
+							footprint.insert({ x + x0, y + y0 });
+					}
+			}
+
+			std::vector<RswModel::AutoGatTile> result;
+
+			// tiles the model used to block but doesn't anymore
+			for (const auto& old : rswModel->autoGatTiles)
+			{
+				TileKey k(old.x, old.y);
+				if (footprint.count(k) > 0)
+					continue;
+				auto& tileOwners = owners[k];
+				tileOwners.erase(rswModel);
+				// give the tile back, unless somebody else still blocks it or it was changed by hand in the meantime
+				if (tileOwners.empty() && valueOf(k) == old.set)
+					virtualValue[k] = old.orig;
+			}
+
+			// tiles the model blocks now
+			for (const auto& k : footprint)
+			{
+				auto& tileOwners = owners[k];
+				auto existing = tileOwners.find(rswModel);
+				if (existing != tileOwners.end())
+				{
+					// already blocked by this model; follow a changed type
+					if (existing->second.set != gatType && valueOf(k) == existing->second.set)
+					{
+						virtualValue[k] = gatType;
+						existing->second.set = gatType;
+					}
+					result.push_back(existing->second);
+					continue;
+				}
+
+				RswModel::AutoGatTile t;
+				t.x = k.first;
+				t.y = k.second;
+				// when another model already blocks the tile, the value from before any model is what we have to give back
+				t.orig = tileOwners.empty() ? valueOf(k) : tileOwners.begin()->second.orig;
+				t.set = gatType;
+				if (valueOf(k) != gatType)
+					virtualValue[k] = gatType;
+				tileOwners[rswModel] = t;
+				result.push_back(t);
+			}
+
+			bool changed = result.size() != rswModel->autoGatTiles.size();
+			for (size_t i = 0; !changed && i < result.size(); i++)
+			{
+				const auto& a = result[i];
+				const auto& b = rswModel->autoGatTiles[i];
+				changed = a.x != b.x || a.y != b.y || a.orig != b.orig || a.set != b.set;
+			}
+			if (changed)
+				ga->addAction(new AutoGatFootprintAction(rswModel, result));
+		});
+	}
+
+	for (const auto& v : virtualValue)
+		if (gat->cubes[v.first.first][v.first.second]->gatType != v.second)
+			ga->addAction(new GatTileChangeAction(glm::ivec2(v.first.first, v.first.second), gat->cubes[v.first.first][v.first.second], v.second));
+}
+
+void Map::autoGatFollow(const std::vector<Node*>& nodes, BrowEdit* browEdit, GroupAction* ga, bool removed)
+{
+	if (browEdit->autoGatOnPlace)
+		addAutoGatActions(nodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, removed, false, browEdit->autoGatFillInterior, browEdit->autoGatCloseGap);
 }
 
 
@@ -827,6 +1203,105 @@ void Map::exportMinimapWalkable(BrowEdit* browEdit)
 		std::cout << "ERROR: Failed to write " << outPath << std::endl;
 		MessageBoxA(NULL, ("Failed to write:\n" + outPath).c_str(), "Export Error", MB_OK | MB_ICONERROR);
 	}
+}
+
+
+// top-down picture of the ground (textures, tile colours, shadows and light colours), saved where the client looks for the minimap
+std::string Map::exportMinimapRendered(BrowEdit* browEdit, int size, bool shading, bool relief, bool padMagenta)
+{
+	auto gnd = rootNode->getComponent<Gnd>();
+	if (!gnd || gnd->width < 1 || gnd->height < 1)
+		return "No ground to render";
+	size = std::clamp(size, 64, 4096);
+	const int outW = size, outH = size;
+	std::vector<unsigned char> img((size_t)outW * outH * 3, 0);
+	if (padMagenta)
+		for (size_t i = 0; i < img.size(); i += 3) { img[i] = 255; img[i + 1] = 0; img[i + 2] = 255; }
+
+	float scale = std::min((float)outW / (10.0f * gnd->width), (float)outH / (10.0f * gnd->height));		// pixels per world unit
+	int contentW = std::max(1, (int)(10.0f * gnd->width * scale)), contentH = std::max(1, (int)(10.0f * gnd->height * scale));
+	int ox = (outW - contentW) / 2, oy = (outH - contentH) / 2;
+
+	std::vector<const advtex::Img*> imgs(gnd->textures.size(), nullptr);
+	for (size_t i = 0; i < gnd->textures.size(); i++)
+		imgs[i] = advtex::getImg(gnd->textures[i]->file);
+
+	// colour of one point of the ground; (wx, wzTop) are world units, wzTop counted from the top of the picture
+	auto sampleGround = [&](float wx, float wzTop, float out[3]) -> bool
+	{
+		int cx = (int)std::floor(wx / 10.0f), cy = (int)std::floor(wzTop / 10.0f);
+		if (cx < 0 || cy < 0 || cx >= gnd->width || cy >= gnd->height) return false;
+		float fx = wx / 10.0f - cx, fz = 1.0f - (wzTop / 10.0f - cy);
+		auto cube = gnd->cubes[cx][cy];
+		if (cube->tileUp < 0 || cube->tileUp >= (int)gnd->tiles.size()) return false;
+		auto tile = gnd->tiles[cube->tileUp];
+		float rgb[3] = { 128, 128, 128 };
+		if (tile->textureIndex >= 0 && tile->textureIndex < (int)imgs.size() && imgs[tile->textureIndex])
+		{
+			const advtex::Img& im = *imgs[tile->textureIndex];
+			glm::vec2 uv = (tile->v3 * (1 - fx) + tile->v4 * fx) * (1 - fz) + (tile->v1 * (1 - fx) + tile->v2 * fx) * fz;
+			float x = std::clamp(uv.x, 0.0f, 1.0f) * im.w - 0.5f, y = std::clamp(uv.y, 0.0f, 1.0f) * im.h - 0.5f;
+			int x0 = (int)std::floor(x), y0 = (int)std::floor(y);
+			float ax = x - x0, ay = y - y0;
+			auto at = [&](int xx, int yy, int c) { xx = std::clamp(xx, 0, im.w - 1); yy = std::clamp(yy, 0, im.h - 1); return (float)im.px[((size_t)yy * im.w + xx) * 4 + c]; };
+			for (int c = 0; c < 3; c++)
+			{
+				float a = at(x0, y0, c) * (1 - ax) + at(x0 + 1, y0, c) * ax, b = at(x0, y0 + 1, c) * (1 - ax) + at(x0 + 1, y0 + 1, c) * ax;
+				rgb[c] = a * (1 - ay) + b * ay;
+			}
+		}
+		for (int c = 0; c < 3; c++) rgb[c] *= tile->color[c] / 255.0f;
+		if (shading && tile->lightmapIndex >= 0 && tile->lightmapIndex < (int)gnd->lightmaps.size())
+		{
+			auto lm = gnd->lightmaps[tile->lightmapIndex];
+			int lw = gnd->lightmapWidth, lh = gnd->lightmapHeight;
+			int lx = std::clamp((int)(1 + fx * (lw - 2)), 0, lw - 1), ly = std::clamp((int)(1 + (1.0f - fz) * (lh - 2)), 0, lh - 1);
+			float shade = lm->data[lw * ly + lx] / 255.0f;
+			for (int c = 0; c < 3; c++)
+				rgb[c] = rgb[c] * (0.45f + 0.55f * shade) + lm->data[lw * lh + 3 * (lw * ly + lx) + c] * 0.5f;
+		}
+		if (relief)
+		{
+			// small hill shading from the ground's slope, so cliffs and hollows read on a flat picture
+			float hh = -((cube->h3 * (1 - fx) + cube->h4 * fx) * (1 - fz) + (cube->h1 * (1 - fx) + cube->h2 * fx) * fz);
+			float dx = -((cube->h2 + cube->h4) - (cube->h1 + cube->h3)) * 0.5f, dz = -((cube->h1 + cube->h2) - (cube->h3 + cube->h4)) * 0.5f;
+			(void)hh;
+			float l = std::clamp(1.0f + (dx * -0.5f + dz * 0.5f) * 0.02f, 0.6f, 1.4f);
+			for (int c = 0; c < 3; c++) rgb[c] *= l;
+		}
+		for (int c = 0; c < 3; c++) out[c] = rgb[c];
+		return true;
+	};
+
+	for (int py = 0; py < contentH; py++)
+		for (int px = 0; px < contentW; px++)
+		{
+			float acc[3] = { 0, 0, 0 }; int n = 0;
+			for (int sy = 0; sy < 2; sy++)
+				for (int sx = 0; sx < 2; sx++)
+				{
+					float c[3];
+					if (sampleGround((px + 0.25f + 0.5f * sx) / scale, (py + 0.25f + 0.5f * sy) / scale, c)) { for (int k = 0; k < 3; k++) acc[k] += c[k]; n++; }
+				}
+			if (n == 0) continue;
+			size_t o = ((size_t)(oy + py) * outW + (ox + px)) * 3;
+			for (int k = 0; k < 3; k++) img[o + k] = (unsigned char)std::clamp((int)std::lround(acc[k] / n), 0, 255);
+			if (n < 4 && padMagenta) for (int k = 0; k < 3; k++) img[o + k] = (unsigned char)std::clamp((int)std::lround((acc[k] + (k == 1 ? 0 : 255.0f) * (4 - n)) / 4.0f), 0, 255);
+		}
+
+	std::string mapName = name;
+	auto pos = mapName.find_last_of("\\/");
+	if (pos != std::string::npos) mapName = mapName.substr(pos + 1);
+	pos = mapName.rfind('.');
+	if (pos != std::string::npos) mapName = mapName.substr(0, pos);
+
+	std::string outDir = browEdit->config.ropath + "data\\texture\\\xc0\xaf\xc0\xfa\xc0\xce\xc5\xcd\xc6\xe4\xc0\xcc\xbd\xba\\map";
+	std::error_code ec;
+	std::filesystem::create_directories(outDir, ec);
+	std::string outPath = outDir + "\\" + mapName + ".bmp";
+	if (!stbi_write_bmp(outPath.c_str(), outW, outH, 3, img.data()))
+		return "Could not write " + outPath;
+	return "Saved " + outPath;
 }
 
 

@@ -600,6 +600,9 @@ void LightmapperGpu::executeComputeShaders()
 
 		shader->setUniform(LightmapperShader::Uniforms::additiveShadow, settings->additiveShadow);
 		shader->setUniform(LightmapperShader::Uniforms::shadows, settings->shadows);
+		shader->setUniform(LightmapperShader::Uniforms::softSamples, settings->softShadows ? settings->softSamples : 0);
+		shader->setUniform(LightmapperShader::Uniforms::softAngleTan, std::tan(glm::radians(settings->softAngle)));
+		shader->setUniform(LightmapperShader::Uniforms::softRadius, settings->lightRadius);
 		shader->setUniform(LightmapperShader::Uniforms::quality, quality);
 		shader->setUniform(LightmapperShader::Uniforms::lightmapWidth, gnd->lightmapWidth);
 		shader->setUniform(LightmapperShader::Uniforms::lightmapHeight, gnd->lightmapHeight);

@@ -58,6 +58,17 @@ void RswModel::load(std::istream* is, int version, int buildNumber, bool loadMod
 void RswModel::loadExtra(nlohmann::json data)
 {
 	try {
+		autoGatTiles.clear();
+		if (data.find("autoGatTiles") != data.end())
+			for (const auto& t : data["autoGatTiles"])
+			{
+				AutoGatTile tile;
+				tile.x = t[0]; tile.y = t[1]; tile.orig = t[2]; tile.set = t[3];
+				autoGatTiles.push_back(tile);
+			}
+	}
+	catch (...) { autoGatTiles.clear(); }
+	try {
 		if (data.find("shadow") != data.end())
 			shadowStrength = data["shadow"].get<bool>() ? 1.0f : 0.0f;
 		if(data.find("shadowStrength") != data.end())
@@ -107,6 +118,13 @@ nlohmann::json RswModel::saveExtra()
 	ret["gatCollision"] = gatCollision;
 	ret["gatStraightType"] = gatStraightType;
 	ret["gatType"] = gatType;
+	if (!autoGatTiles.empty())
+	{
+		nlohmann::json tiles = nlohmann::json::array();
+		for (const auto& t : autoGatTiles)
+			tiles.push_back({ t.x, t.y, t.orig, t.set });
+		ret["autoGatTiles"] = tiles;
+	}
 	return ret;
 }
 

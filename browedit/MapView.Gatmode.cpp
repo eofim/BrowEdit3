@@ -344,6 +344,38 @@ void MapView::postRenderGatMode(BrowEdit* browEdit)
 			simpleShader->setUniform(SimpleShader::Uniforms::color, glm::vec4(1, 0, 0, 0.25f));
 			glDrawArrays(GL_TRIANGLES, 0, (int)verts.size());
 
+			// preview of the GAT type that "Apply GAT type to selection" would set on these cells
+			if (browEdit->windowData.gatEdit.previewType >= 0 && !browEdit->heightDoodle)
+			{
+				int pt = browEdit->windowData.gatEdit.previewType;
+				glm::vec2 t1(.25f * (pt % 4), .25f * (pt / 4));
+				glm::vec2 t2 = t1 + glm::vec2(.25f);
+				std::vector<VertexP3T2N3> pv;
+				float pdist = dist * 2.0f;
+				for (auto& tile : map->gatSelection)
+				{
+					auto cube = gat->cubes[tile.x][tile.y];
+					pv.push_back(VertexP3T2N3(glm::vec3(5 * tile.x,		-cube->h3 + pdist, 5 * gat->height - 5 * tile.y + 5), glm::vec2(t1.x, t1.y), cube->normal));
+					pv.push_back(VertexP3T2N3(glm::vec3(5 * tile.x + 5,	-cube->h2 + pdist, 5 * gat->height - 5 * tile.y + 10), glm::vec2(t2.x, t2.y), cube->normal));
+					pv.push_back(VertexP3T2N3(glm::vec3(5 * tile.x + 5,	-cube->h4 + pdist, 5 * gat->height - 5 * tile.y + 5), glm::vec2(t2.x, t1.y), cube->normal));
+
+					pv.push_back(VertexP3T2N3(glm::vec3(5 * tile.x,		-cube->h1 + pdist, 5 * gat->height - 5 * tile.y + 10), glm::vec2(t1.x, t2.y), cube->normal));
+					pv.push_back(VertexP3T2N3(glm::vec3(5 * tile.x,		-cube->h3 + pdist, 5 * gat->height - 5 * tile.y + 5), glm::vec2(t1.x, t1.y), cube->normal));
+					pv.push_back(VertexP3T2N3(glm::vec3(5 * tile.x + 5,	-cube->h2 + pdist, 5 * gat->height - 5 * tile.y + 10), glm::vec2(t2.x, t2.y), cube->normal));
+				}
+				if (pv.size() > 0)
+				{
+					glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(VertexP3T2N3), pv[0].data);
+					glVertexAttribPointer(1, 2, GL_FLOAT, false, sizeof(VertexP3T2N3), pv[0].data + 3);
+					glVertexAttribPointer(2, 3, GL_FLOAT, false, sizeof(VertexP3T2N3), pv[0].data + 5);
+					browEdit->gatTexture->bind();
+					simpleShader->setUniform(SimpleShader::Uniforms::color, glm::vec4(1, 1, 1, 1));
+					simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 1.0f);
+					glDrawArrays(GL_TRIANGLES, 0, (int)pv.size());
+					simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 0.0f);
+				}
+			}
+
 
 			Gadget::setMatrices(nodeRenderContext.projectionMatrix, nodeRenderContext.viewMatrix);
 			glDepthMask(1);

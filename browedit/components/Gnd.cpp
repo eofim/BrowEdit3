@@ -1197,38 +1197,53 @@ void Gnd::cleanTiles(bool silent)
 {
 	if (!silent)
 		std::cout << "Tiles cleanup, starting with " << tiles.size() << " tiles" << std::endl;
-	std::set<int> used;
+	// O(tiles + cubes): flag used tiles, build an old->new index table, compact once.
+	// (The old version erased tiles one by one and rescanned every cube each time, which froze the editor with >100k unused tiles.)
+	std::vector<char> used(tiles.size(), 0);
+	size_t usedCount = 0;
 	for (int y = 0; y < height; y++)
 		for (int x = 0; x < width; x++)
-			for(int i = 0; i < 3; i++)
-				if(cubes[x][y]->tileIds[i] != -1)
-					used.insert(cubes[x][y]->tileIds[i]);
+			for (int i = 0; i < 3; i++)
+			{
+				int id = cubes[x][y]->tileIds[i];
+				if (id >= 0 && id < (int)tiles.size() && !used[id])
+				{
+					used[id] = 1;
+					usedCount++;
+				}
+			}
 	if (!silent)
-		std::cout << "Made list of used tiles..." <<used.size()<< std::endl;
-
-	std::list<std::size_t> toRemove;
-	for (std::size_t i = 0; i < tiles.size(); i++)
-		if (used.find((int)i) == used.end())
-			toRemove.push_back(i);
-	toRemove.reverse();
-	
-	if (!silent)
-		std::cout << "Made list of unused tiles..." << toRemove.size()<<std::endl;
-
-	//TODO: make an array of tiles.size() long, initialize at 0. loop through toRemove, and increase values in array to be the amount to lower. Then use as lookup
-
-	for (std::size_t i : toRemove)
+		std::cout << "Made list of used tiles..." << usedCount << std::endl;
+	if (usedCount == tiles.size())
 	{
-		tiles.erase(tiles.begin() + i);
-		for (int y = 0; y < height; y++)
-			for (int x = 0; x < width; x++)
-				for(int ii = 0; ii < 3; ii++)
-					if (cubes[x][y]->tileIds[ii] > (int)i)
-						cubes[x][y]->tileIds[ii]--;
+		if (!silent)
+			std::cout << "Tiles cleanup, nothing to remove" << std::endl;
+		return;
 	}
 
+	std::vector<int> remap(tiles.size(), -1);
+	std::vector<Tile*> kept;
+	kept.reserve(usedCount);
+	for (std::size_t i = 0; i < tiles.size(); i++)
+		if (used[i])
+		{
+			remap[i] = (int)kept.size();
+			kept.push_back(tiles[i]);
+		}
 	if (!silent)
-		std::cout<< "Tiles cleanup, ending with " << tiles.size() << " tiles" << std::endl;
+		std::cout << "Made list of unused tiles..." << (tiles.size() - usedCount) << std::endl;
+	tiles.swap(kept);
+	for (int y = 0; y < height; y++)
+		for (int x = 0; x < width; x++)
+			for (int i = 0; i < 3; i++)
+			{
+				int id = cubes[x][y]->tileIds[i];
+				if (id >= 0)
+					cubes[x][y]->tileIds[i] = remap[id];
+			}
+
+	if (!silent)
+		std::cout << "Tiles cleanup, ending with " << tiles.size() << " tiles" << std::endl;
 }
 
 void Gnd::removeUnusedTextures(BrowEdit* browEdit)

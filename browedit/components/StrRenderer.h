@@ -71,6 +71,7 @@ public:
 	std::vector<VertexP2T2> verts;
 public:
 	StrRenderer();
+	void setStrEffect(StrEffect* e) { strEffect = e; }
 	~StrRenderer();
 	void begin();
 	virtual void render(NodeRenderContext& context) override;

@@ -25,6 +25,26 @@ json releaseInfo;
 void updateEffects(HWND hwnd);
 void updateFfmpeg(HWND hwnd);
 
+// Which GitHub repository the releases come from. This is borf/browedit3 unless a file called
+// patcher_repo.txt next to the Patcher contains a different "owner/repo", for example a fork.
+std::wstring getReleaseRepo()
+{
+    std::string repo = "borf/browedit3";
+    std::ifstream file("patcher_repo.txt");
+    std::string line;
+    if (file && std::getline(file, line))
+    {
+        if (line.compare(0, 3, "\xEF\xBB\xBF") == 0) // some versions of Notepad save a UTF-8 byte order mark
+            line.erase(0, 3);
+        const char* whitespace = " \t\r\n";
+        line.erase(0, line.find_first_not_of(whitespace));
+        line.erase(line.find_last_not_of(whitespace) + 1);
+        if (!line.empty() && line.find('/') != std::string::npos)
+            repo = line;
+    }
+    return std::wstring(repo.begin(), repo.end());
+}
+
 
 void setDesc(HWND hDlg, int i)
 {
@@ -46,7 +66,7 @@ INT_PTR CALLBACK Wndproc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
         for (int i = 0; i < 4; i++)
         {
             try {
-                auto data = net::fetch_request(net::url(L"https://api.github.com/repos/borf/browedit3/releases"));
+                auto data = net::fetch_request(net::url(L"https://api.github.com/repos/" + getReleaseRepo() + L"/releases"));
                 std::string sdata(data.begin(), data.end());
                 OutputDebugString(sdata.c_str());
                 releaseInfo = json::parse(sdata);

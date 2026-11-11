@@ -5,6 +5,8 @@
 #include <browedit/util/FileIO.h>
 #include <browedit/util/Util.h>
 #include <iostream>
+#include <cctype>
+#include <string>
 #include <stb/stb_image.h>
 
 namespace gl
@@ -46,6 +48,14 @@ namespace gl
 			glDeleteTextures(frameCount, ids);
 			delete[] ids;
 		}
+	}
+
+	// Generated/baked ground atlases (prt_nov*) pack unrelated cubes next to each other; with mipmaps their cells bleed into the neighbours and show grid lines when zoomed out.
+	bool Texture::isBakedAtlas() const
+	{
+		std::string f = fileName;
+		for (auto& ch : f) ch = (char)tolower((unsigned char)ch);
+		return f.find("prt_nov") != std::string::npos || (f.find("_at_") != std::string::npos && f.size() > 4 && f.substr(f.size() - 4) == ".bmp");	// Advanced Texture atlases too
 	}
 
 	void Texture::reload()
@@ -90,7 +100,7 @@ namespace gl
 				glBindTexture(GL_TEXTURE_2D, ids[frame]);
 				glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data+(width*height*4)*frame);
 				glGenerateMipmap(GL_TEXTURE_2D);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, defaultEnableMipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (defaultEnableMipmap && !isBakedAtlas()) ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
@@ -148,7 +158,7 @@ namespace gl
 			stbi_image_free(data);
 			//std::cout << "Texture: loaded " << fileName << std::endl;;
 			glGenerateMipmap(GL_TEXTURE_2D);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, defaultEnableMipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (defaultEnableMipmap && !isBakedAtlas()) ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
 			// RSM2 animated textures use GL_REPEAT
@@ -172,7 +182,7 @@ namespace gl
 	void Texture::setMipmap(bool value)
 	{
 		bind();
-		glTexParameteri(textureArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, value ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+		glTexParameteri(textureArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (value && !isBakedAtlas()) ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
 	}
 
 	GLuint Texture::getId(int index)

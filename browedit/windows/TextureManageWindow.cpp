@@ -1,4 +1,5 @@
 #include <browedit/BrowEdit.h>
+#include <browedit/CliffTool.h>
 #include <browedit/util/ResourceManager.h>
 #include <browedit/gl/Texture.h>
 #include <browedit/Map.h>
@@ -100,6 +101,8 @@ void BrowEdit::showTextureManageWindow()
 					auto gnd = activeMapView->map->rootNode->getComponent<Gnd>();
 					auto gndRenderer = activeMapView->map->rootNode->getComponent<GndRenderer>();
 					std::string tex = path.substr(13); // remove "data\texture\"
+					if (editMode == EditMode::Height && heightDoodle)
+						cliff::onTexturePicked(tex);
 
 					bool found = false;
 					for (auto i = 0; i < gnd->textures.size(); i++)

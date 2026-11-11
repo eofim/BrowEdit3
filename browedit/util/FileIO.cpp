@@ -6,6 +6,14 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <mutex>
+#include <thread>
+#include <chrono>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 
 namespace util
@@ -123,6 +131,159 @@ namespace util
 					cacheHit->second->addFile(file.substr(isDir + 1));
 			}
 		}
+	}
+
+
+	// ------------------------------------------------------------------ live file watching
+	namespace
+	{
+		struct WatchEvent { double t; bool removed; };
+		std::mutex* watchMutex = new std::mutex();									// never freed: the watcher threads outlive main()
+		std::map<std::string, WatchEvent>* watchPending = new std::map<std::string, WatchEvent>();
+		bool watchOverflow = false;
+		double nowSec() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
+		std::string lowerStr(std::string s) { for (auto& c : s) c = (char)::tolower((unsigned char)c); return s; }
+
+		void pruneNode(FileIO::Node* n, const std::string& kr)
+		{
+			for (auto it = n->files.begin(); it != n->files.end();)
+			{
+				if (!FileIO::exists(kr + utf8_to_iso_8859_1(*it))) it = n->files.erase(it); else ++it;
+			}
+			for (auto& d : n->directories) pruneNode(d.second, kr + d.first + "\\");
+		}
+
+#ifdef _WIN32
+		void watchLoop(std::string dir)
+		{
+			if (!dir.empty() && dir.back() != '\\') dir += "\\";
+			dir += "data\\";		// live reading only applies to the data folder
+			HANDLE h = CreateFileA(dir.c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+			if (h == INVALID_HANDLE_VALUE) return;
+			std::vector<char> buf(256 * 1024);
+			while (true)
+			{
+				DWORD bytes = 0;
+				if (!ReadDirectoryChangesW(h, buf.data(), (DWORD)buf.size(), TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE, &bytes, nullptr, nullptr))
+					break;
+				std::lock_guard<std::mutex> lock(*watchMutex);
+				if (bytes == 0) { watchOverflow = true; continue; }		// too many changes at once: rescan
+				char* p = buf.data();
+				for (;;)
+				{
+					auto* fni = (FILE_NOTIFY_INFORMATION*)p;
+					int len = WideCharToMultiByte(CP_ACP, 0, fni->FileName, fni->FileNameLength / 2, nullptr, 0, nullptr, nullptr);
+					std::string name(len, 0);
+					if (len > 0) WideCharToMultiByte(CP_ACP, 0, fni->FileName, fni->FileNameLength / 2, &name[0], len, nullptr, nullptr);
+					name = "data\\" + name;
+					std::string l = lowerStr(name);
+					bool ours = l.rfind("data\\", 0) == 0 && !(l.size() > 4 && l.substr(l.size() - 4) == ".tmp");
+					if (ours)
+						(*watchPending)[name] = WatchEvent{ nowSec(), fni->Action == FILE_ACTION_REMOVED || fni->Action == FILE_ACTION_RENAMED_OLD_NAME };
+					if (!fni->NextEntryOffset) break;
+					p += fni->NextEntryOffset;
+				}
+			}
+			CloseHandle(h);
+		}
+#endif
+	}
+
+	void FileIO::startWatching()
+	{
+#ifdef _WIN32
+		static bool started = false;
+		if (started) return;
+		started = true;
+		std::set<std::string> seen;
+		for (auto s : sources)
+		{
+			auto ds = dynamic_cast<DirSource*>(s);
+			if (!ds) continue;
+			std::error_code ec;
+			std::string abs = std::filesystem::absolute(ds->dir(), ec).string();
+			if (ec || !seen.insert(lowerStr(abs)).second) continue;
+			std::thread([abs]() { watchLoop(abs); }).detach();
+		}
+#endif
+	}
+
+	std::vector<std::string> FileIO::pollChanges()
+	{
+		std::vector<std::string> changed;
+		std::vector<std::pair<std::string, bool>> ready;
+		bool overflow = false;
+		{
+			std::lock_guard<std::mutex> lock(*watchMutex);
+			double t = nowSec();
+			for (auto it = watchPending->begin(); it != watchPending->end();)
+			{
+				if (t - it->second.t > 0.35) { ready.emplace_back(it->first, it->second.removed); it = watchPending->erase(it); }	// let a copy finish first
+				else ++it;
+			}
+			overflow = watchOverflow; watchOverflow = false;
+		}
+		if (!rootNode) return changed;
+		if (overflow) reload("");
+		for (auto& ev : ready)
+		{
+			const std::string& path = ev.first;
+			std::string full;
+			for (auto s : sources)
+				if (auto ds = dynamic_cast<DirSource*>(s))
+				{
+					std::error_code ec;
+					if (std::filesystem::exists(ds->dir() + path, ec)) { full = ds->dir() + path; break; }
+				}
+			if (full.empty())
+			{
+				if (FileIO::exists(path)) continue;		// still provided by a GRF or another folder
+				// gone: take it out of the tree (nodes stay, so selected folders in the pickers remain valid)
+				Node* n = rootNode;
+				size_t start = 0;
+				bool found = true;
+				while (true)
+				{
+					size_t p = path.find('\\', start);
+					std::string comp = path.substr(start, p == std::string::npos ? std::string::npos : p - start);
+					if (p == std::string::npos)
+					{
+						n->files.erase(iso_8859_1_to_utf8(comp));
+						auto d = n->directories.find(comp);
+						if (d != n->directories.end()) pruneNode(d->second, path + "\\");
+						break;
+					}
+					auto d = n->directories.find(comp);
+					if (d == n->directories.end()) { found = false; break; }
+					n = d->second; start = p + 1;
+				}
+				(void)found;
+				continue;
+			}
+			std::error_code ec;
+			if (std::filesystem::is_directory(full, ec))
+			{
+				Node* n = rootNode;
+				size_t start = 0;
+				while (start <= path.size())
+				{
+					size_t p = path.find('\\', start);
+					std::string comp = path.substr(start, p == std::string::npos ? std::string::npos : p - start);
+					if (!comp.empty() && n->directories.find(comp) == n->directories.end()) n->directories[comp] = new Node(iso_8859_1_to_utf8(comp), n);
+					if (!comp.empty()) n = n->directories[comp];
+					if (p == std::string::npos) break;
+					start = p + 1;
+				}
+				reload(path);		// a whole folder was dropped in
+			}
+			else
+			{
+				rootNode->addFile(path);
+				changed.push_back(path);
+			}
+		}
+		return changed;
 	}
 
 	FileIO::Node* FileIO::Node::addFile(const std::string& fileName)

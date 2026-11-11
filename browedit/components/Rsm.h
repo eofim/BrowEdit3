@@ -179,6 +179,10 @@ public:
 	void reload();
 	
 	void save(const std::string& filename);
+	// writes a copy of the original file (same version, nothing else changed) with other texture names; names are the ones in 'textures'
+	bool saveWithTextures(const std::string& outFile, const std::map<std::string, std::string>& newNames, std::string& error);
+	struct TexSpan { long long offset = -1; int size = 0; bool fixed = false; std::string name; };		// where each texture name sits in the file
+	std::vector<TexSpan> texSpans;
 
 	std::string fileName;
 	bool loaded;

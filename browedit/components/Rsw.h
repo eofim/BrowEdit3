@@ -99,7 +99,7 @@ public:
 		float nearPlane = 0.0f;
 		float farPlane = 1.0f;
 		float factor = 0.5f;
-		glm::vec4 color;
+		glm::vec4 color = glm::vec4(0.8f, 0.85f, 0.95f, 1.0f);
 	} fog;
 
 
@@ -156,6 +156,11 @@ public:
 		bool additiveShadow = true;
 		bool ignoreBacksideTexture = true;
 		bool runOnGpu = true;
+		// soft shadows (not saved with the map)
+		bool softShadows = false;
+		int softSamples = 24;
+		float softAngle = 3.0f;		// sun size in degrees
+		float lightRadius = 4.0f;	// point and spot lights, world units
 		glm::ivec2 rangeX;
 		glm::ivec2 rangeY;
 
@@ -227,6 +232,10 @@ public:
 	bool gatCollision = true;
 	int gatStraightType = 0;
 	int gatType = -1;
+
+	// tiles this model blocked through Auto-GAT, so they can follow the model when it moves and be given back when it is deleted
+	struct AutoGatTile { int x = 0, y = 0, orig = 0, set = 0; };
+	std::vector<AutoGatTile> autoGatTiles;
 
 	RswModel() : aabb(glm::vec3(), glm::vec3()) {}
 	RswModel(const std::string &fileName) : aabb(glm::vec3(), glm::vec3()), animType(0), animSpeed(1), blockType(0), fileName(fileName) {}
@@ -463,3 +472,6 @@ public:
 	bool isColliding(const math::Ray& ray, std::vector<glm::vec3>& ret);
 	void getCollisionsSub(Rsm::Mesh* mesh, const math::Ray& ray, const glm::mat4& matrix, std::vector<glm::vec3>& ret);
 };
+
+// Shows the real client animation (.str) of a normal effect id on its node, when the effect table knows one.
+void attachEffectPreview(Node* node);

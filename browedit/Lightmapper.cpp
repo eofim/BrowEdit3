@@ -382,12 +382,14 @@ std::pair<glm::vec3, int> Lightmapper::calculateLight(const glm::vec3& groundPos
 			distance = 99999;
 		}
 
-		bool collides = false;
 		float shadowStrength = 0.0f;
 
-		if (settings.shadows)
+		// how much of the light is blocked along one ray (0..1)
+		auto shadowAlong = [&](const glm::vec3& dir, float dist) -> float
 		{
-			math::Ray ray(groundPos, lightDirection2);
+			bool collides = false;
+			float strength = 0.0f;
+			math::Ray ray(groundPos, dir);
 
 			// Can happen on large maps with a high amount of lights
 			if (++currentStamp == 0) {
@@ -395,7 +397,7 @@ std::pair<glm::vec3, int> Lightmapper::calculateLight(const glm::vec3& groundPos
 				currentStamp = 1;
 			}
 
-			util::traverseGridDDA(ray, (int)quadtree.size(), (int)quadtree[0].size(), distance, [&](int qx, int qy, float t) {
+			util::traverseGridDDA(ray, (int)quadtree.size(), (int)quadtree[0].size(), dist, [&](int qx, int qy, float t) {
 				auto& cell = quadtree[qx][qy];
 
 				for (auto model : cell.models) {
@@ -406,14 +408,14 @@ std::pair<glm::vec3, int> Lightmapper::calculateLight(const glm::vec3& groundPos
 
 					visitedStamp[id] = currentStamp;
 
-					if (shadowStrength >= 1.0f)
+					if (strength >= 1.0f)
 						return true;
 
-					if (model->collider->collidesTexture(ray, 0, distance - rswLight->minShadowDistance)) {
+					if (model->collider->collidesTexture(ray, 0, dist - rswLight->minShadowDistance)) {
 						collides = true;
-						shadowStrength += model->rswModel->shadowStrength;
+						strength += model->rswModel->shadowStrength;
 
-						if (shadowStrength >= 1.0f)
+						if (strength >= 1.0f)
 							return true;
 					}
 				}
@@ -422,10 +424,40 @@ std::pair<glm::vec3, int> Lightmapper::calculateLight(const glm::vec3& groundPos
 			});
 
 			// Check if the ray collides with the ground
-			if (!collides && shadowStrength < 1 && rswLight->shadowTerrain && collidesMap(math::Ray(groundPos, lightDirection2), cx, cy, distance))
+			if (!collides && strength < 1 && rswLight->shadowTerrain && collidesMap(math::Ray(groundPos, dir), cx, cy, dist))
+				strength = 1;
+			return std::min(strength, 1.0f);
+		};
+
+		if (settings.shadows)
+		{
+			if (!settings.softShadows || settings.softSamples < 2)
+				shadowStrength = shadowAlong(lightDirection2, distance);
+			else
 			{
-				collides = true;
-				shadowStrength = 1;
+				// area light: many rays towards points spread over the light's size, so the shadow edge fades out (wider the further the shadow is from what casts it)
+				const int n = settings.softSamples;
+				bool sun = rswLight->lightType == RswLight::Type::Sun;
+				glm::vec3 t1 = glm::normalize(glm::cross(lightDirection2, std::fabs(lightDirection2.y) < 0.95f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0)));
+				glm::vec3 t2 = glm::cross(lightDirection2, t1);
+				float spread = sun ? std::tan(glm::radians(settings.softAngle)) : settings.lightRadius;
+				float acc = 0.0f;
+				for (int i = 0; i < n; i++)
+				{
+					float r = std::sqrt((i + 0.5f) / n), th = i * 2.39996323f;		// even spread over a disc
+					glm::vec3 off = (t1 * std::cos(th) + t2 * std::sin(th)) * r;
+					if (sun)
+						acc += shadowAlong(glm::normalize(lightDirection2 + off * spread), distance);
+					else
+					{
+						glm::vec3 lp = lightPosition + off * spread;
+						glm::vec3 d = lp - groundPos;
+						float dl = glm::length(d);
+						if (dl < 1e-4f) { acc += 0.0f; continue; }
+						acc += shadowAlong(d / dl, dl);
+					}
+				}
+				shadowStrength = acc / n;
 			}
 		}
 		if (shadowStrength > 1)

@@ -65,6 +65,41 @@ void BrowEdit::showObjectEditToolsWindow()
 	hotkeyButton("Randomize Y rotation", HotkeyAction::ObjectEdit_RandomYRotation);
 	hotkeyButton("Randomize Z rotation", HotkeyAction::ObjectEdit_RandomZRotation);
 
+	ImGui::Separator();
+	ImGui::Checkbox("Random scale on place", &randomScaleOnPlace);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Each single model you place (trees, bushes...) gets a random uniform scale between min and max.");
+	if (randomScaleOnPlace)
+	{
+		ImGui::DragFloat("Scale min", &randomScaleMin, 0.01f, 0.1f, 5.0f);
+		ImGui::DragFloat("Scale max", &randomScaleMax, 0.01f, 0.1f, 5.0f);
+	}
+	ImGui::Checkbox("Random Y rotation on place", &randomRotYOnPlace);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Each single model you place gets a random rotation around the vertical (green) axis, 0-360.");
+	ImGui::Separator();
+	ImGui::Checkbox("Smart model GAT", &autoGatOnPlace);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Placing a model marks the GAT tiles under its ground contact area as not walkable.\nMoving, rotating, scaling or nudging it moves those tiles along, deleting it gives them back.\nTiles you edited by hand are left alone. Every step is one undo.\nOnly models placed with this ticked are followed.");
+	if (autoGatOnPlace)
+	{
+		ImGui::DragFloat("Ground contact height", &autoGatBandHeight, 0.1f, 0.0f, 100.0f);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Model surfaces within this height above the terrain count as touching the ground.\nLower = only the base of the model, higher = also block things hanging slightly above ground.");
+		ImGui::Checkbox("Fill inside", &autoGatFillInterior);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Also block the area enclosed by the model, like the floor inside a house.");
+		if (autoGatFillInterior)
+		{
+			ImGui::DragInt("Doorway gap to close", &autoGatCloseGap, 0.1f, 0, 3);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Openings up to this many tiles on each side of a doorway still count as closed,\nso the inside gets filled even when the house has a door. 0 = only fully closed walls.");
+		}
+		ImGui::DragInt("GAT type", &autoGatType, 0.1f, 0, 15);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("GAT type to apply (1 = not walkable).\nModels with 'Force gat tiles on model' set use that value instead.");
+	}
+
 
 	ImGui::End();
 }

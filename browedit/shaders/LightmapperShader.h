@@ -16,6 +16,9 @@ public:
 			quality,
 			shadows,
 			additiveShadow,
+			softSamples,
+			softAngleTan,
+			softRadius,
 			End
 		};
 	};
@@ -27,5 +30,8 @@ public:
 		bindUniform(Uniforms::quality, "quality");
 		bindUniform(Uniforms::shadows, "shadows");
 		bindUniform(Uniforms::additiveShadow, "additiveShadow");
+		bindUniform(Uniforms::softSamples, "softSamples");
+		bindUniform(Uniforms::softAngleTan, "softAngleTan");
+		bindUniform(Uniforms::softRadius, "softRadius");
 	}
 };

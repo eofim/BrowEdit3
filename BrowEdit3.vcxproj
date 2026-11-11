@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -63,6 +63,18 @@
     <ClCompile Include="browedit\components\SkyMapRenderer.cpp" />
     <ClCompile Include="browedit\components\Str.cpp" />
     <ClCompile Include="browedit\components\StrRenderer.cpp" />
+    <ClCompile Include="browedit\components\SprRenderer.cpp" />
+    <ClCompile Include="browedit\components\PortalRenderer.cpp" />
+    <ClCompile Include="browedit\sprite\RoFormats.cpp" />
+    <ClCompile Include="browedit\sprite\Compose.cpp" />
+    <ClCompile Include="browedit\sprite\Text.cpp" />
+    <ClCompile Include="browedit\advtex\AdvTexBake.cpp" />
+    <ClCompile Include="browedit\advtex\AdvTexMode.cpp" />
+    <ClCompile Include="browedit\sprite\Db.cpp" />
+    <ClCompile Include="browedit\sprite\Character.cpp" />
+    <ClCompile Include="browedit\sprite\SpriteSystem.cpp" />
+    <ClCompile Include="browedit\sprite\SpriteWindow.cpp" />
+    <ClCompile Include="browedit\components\FxRenderer.cpp" />
     <ClCompile Include="browedit\components\WaterRenderer.cpp" />
     <ClCompile Include="browedit\Config.cpp" />
     <ClCompile Include="browedit\Gadget.cpp" />
@@ -76,11 +88,16 @@
     <ClCompile Include="browedit\Lightmapper.cpp" />
     <ClCompile Include="browedit\LightmapperGpu.cpp" />
     <ClCompile Include="browedit\Map.cpp" />
+    <ClCompile Include="browedit\ClaudeLink.cpp" />
+    <ClCompile Include="browedit\LiveLightmap.cpp" />
     <ClCompile Include="browedit\MapView.Cinematicmode.cpp" />
     <ClCompile Include="browedit\MapView.Colormode.cpp" />
     <ClCompile Include="browedit\MapView.cpp" />
     <ClCompile Include="browedit\MapView.Gatmode.cpp" />
     <ClCompile Include="browedit\MapView.Heightmode.cpp" />
+    <ClCompile Include="browedit\CliffTool.cpp" />
+    <ClCompile Include="browedit\ShapeTool.cpp" />
+    <ClCompile Include="browedit\ModelVariants.cpp" />
     <ClCompile Include="browedit\MapView.Objectmode.cpp" />
     <ClCompile Include="browedit\MapView.Shadowmode.cpp" />
     <ClCompile Include="browedit\MapView.Texturemode.cpp" />
@@ -194,6 +211,7 @@
     <ClInclude Include="browedit\actions\CubeTileChangeAction.h" />
     <ClInclude Include="browedit\actions\DeleteObjectAction.h" />
     <ClInclude Include="browedit\actions\GatTileChangeAction.h" />
+    <ClInclude Include="browedit\actions\AutoGatFootprintAction.h" />
     <ClInclude Include="browedit\actions\GndTextureActions.h" />
     <ClInclude Include="browedit\actions\GndVersionChangeAction.h" />
     <ClInclude Include="browedit\actions\GroupAction.h" />
@@ -237,6 +255,12 @@
     <ClInclude Include="browedit\components\SkyMapRenderer.h" />
     <ClInclude Include="browedit\components\Str.h" />
     <ClInclude Include="browedit\components\StrRenderer.h" />
+    <ClInclude Include="browedit\components\SprRenderer.h" />
+    <ClInclude Include="browedit\components\PortalRenderer.h" />
+    <ClInclude Include="browedit\CliffTool.h" />
+    <ClInclude Include="browedit\ShapeTool.h" />
+    <ClInclude Include="browedit\ModelVariants.h" />
+    <ClInclude Include="browedit\components\FxRenderer.h" />
     <ClInclude Include="browedit\components\WaterRenderer.h" />
     <ClInclude Include="browedit\Config.h" />
     <ClInclude Include="browedit\Gadget.h" />

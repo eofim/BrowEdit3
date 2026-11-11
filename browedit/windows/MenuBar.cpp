@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <browedit/BrowEdit.h>
 #include <browedit/MapView.h>
+#include <browedit/ModelVariants.h>
 #include <browedit/Map.h>
 #include <browedit/Node.h>
 #include <browedit/gl/FBO.h>
@@ -23,6 +24,120 @@
 #include <GLFW/glfw3.h>
 #include <imgui_internal.h>
 #include <fstream>
+#include <set>
+#include <algorithm>
+#include <json.hpp>
+
+#include <stb/stb_image.h>
+#include <stb/stb_image_write.h>
+#include <filesystem>
+#include <iterator>
+
+namespace
+{
+	bool openTextureSheetPopup = false;
+	bool openMinimapPopup = false;
+	int minimapSize = 512;
+	bool minimapShading = true, minimapRelief = false, minimapPad = true;
+	std::string minimapResult;
+	char textureSheetPrefix[128] = "prontera_re";
+	std::string textureSheetResult;
+
+	// contact sheet of the textures in a folder of the client, with the index of every thumbnail, so a tool that can
+	// only look at pictures knows what the textures look like. The names are written next to it in a .json file.
+	void exportTextureSheets(const std::string& prefixIn)
+	{
+		static const char* digits[10] = {
+			"111101101101111", "010110010010111", "111001111100111", "111001111001111", "101101111001001",
+			"111100111001111", "111100111101111", "111001001010010", "111101111101111", "111101111001111" };
+		std::string prefix = prefixIn;
+		std::transform(prefix.begin(), prefix.end(), prefix.begin(), ::tolower);
+		std::replace(prefix.begin(), prefix.end(), '/', '\\');
+		std::string base = "data\\texture\\" + prefix;
+		std::vector<std::string> names;
+		for (auto f : util::FileIO::listAllFiles())
+		{
+			std::transform(f.begin(), f.end(), f.begin(), ::tolower);
+			std::replace(f.begin(), f.end(), '/', '\\');
+			if (f.rfind(base, 0) != 0 || f.size() < 5)
+				continue;
+			bool ascii = true;
+			for (unsigned char c : f)
+				if (c > 127) ascii = false;
+			auto ext = f.substr(f.size() - 4);
+			if (ascii && (ext == ".bmp" || ext == ".jpg" || ext == ".tga" || ext == ".png"))
+				names.push_back(f.substr(13));
+		}
+		std::sort(names.begin(), names.end());
+		names.erase(std::unique(names.begin(), names.end()), names.end());
+		if (names.empty())
+		{
+			textureSheetResult = "No textures found starting with '" + prefixIn + "'";
+			return;
+		}
+
+		const int cell = 96, cols = 16, rows = 16, perSheet = cols * rows;
+		std::filesystem::create_directories("sheets");
+		std::string safe = prefix;
+		std::replace(safe.begin(), safe.end(), '\\', '_');
+		int sheetCount = ((int)names.size() + perSheet - 1) / perSheet;
+		for (int sheet = 0; sheet < sheetCount; sheet++)
+		{
+			const int W = cols * cell, H = rows * cell;
+			std::vector<unsigned char> img((size_t)W * H * 3, 60);
+			nlohmann::json list = nlohmann::json::array();
+			for (int i = 0; i < perSheet && sheet * perSheet + i < (int)names.size(); i++)
+			{
+				const std::string& name = names[sheet * perSheet + i];
+				list.push_back(name);
+				int ox = (i % cols) * cell, oy = (i / cols) * cell;
+				auto is = util::FileIO::open("data\\texture\\" + name);
+				if (is)
+				{
+					std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(*is)), std::istreambuf_iterator<char>());
+					delete is;
+					int w, h, c;
+					unsigned char* data = bytes.empty() ? nullptr : stbi_load_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &c, 3);
+					if (data)
+					{
+						for (int y = 0; y < cell - 2; y++)
+							for (int x = 0; x < cell - 2; x++)
+							{
+								const unsigned char* src = data + ((size_t)(y * h / (cell - 2)) * w + (x * w / (cell - 2))) * 3;
+								unsigned char* dst = &img[((size_t)(oy + y + 1) * W + ox + x + 1) * 3];
+								dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2];
+							}
+						stbi_image_free(data);
+					}
+				}
+				// index number, white digits on black
+				std::string num = std::to_string(i);
+				int nx = ox + 3, ny = oy + 3;
+				for (int px = -1; px < (int)num.size() * 8; px++)
+					for (int py = -1; py < 11; py++)
+					{
+						unsigned char* d = &img[((size_t)(ny + py) * W + nx + px) * 3];
+						d[0] = d[1] = d[2] = 0;
+					}
+				for (size_t k = 0; k < num.size(); k++)
+					for (int py = 0; py < 5; py++)
+						for (int px = 0; px < 3; px++)
+							if (digits[num[k] - '0'][py * 3 + px] == '1')
+								for (int sy = 0; sy < 2; sy++)
+									for (int sx = 0; sx < 2; sx++)
+									{
+										unsigned char* d = &img[((size_t)(ny + py * 2 + sy) * W + nx + (int)k * 8 + px * 2 + sx) * 3];
+										d[0] = d[1] = d[2] = 255;
+									}
+			}
+			std::string stem = "sheets\\" + safe + "_" + std::to_string(sheet);
+			stbi_write_png((stem + ".png").c_str(), W, H, 3, img.data(), W * 3);
+			std::ofstream out(stem + ".json");
+			out << list;
+		}
+		textureSheetResult = "Wrote " + std::to_string(sheetCount) + " sheet(s) for " + std::to_string(names.size()) + " textures to the 'sheets' folder next to BrowEdit3.exe";
+	}
+}
 
 void BrowEdit::menuBar()
 {
@@ -37,6 +152,8 @@ void BrowEdit::menuBar()
 			saveAsMap(activeMapView->map);
 		if (activeMapView && ImGui::MenuItem("Export to folder"))
 			exportMap(activeMapView->map);
+		if (activeMapView && ImGui::MenuItem("Model variants (recolour copies)..."))
+			modelvariants::visible = true;
 		if (ImGui::BeginMenu("Recent Maps", config.recentFiles.size() > 0))
 		{
 			for (const auto& m : config.recentFiles)
@@ -84,6 +201,37 @@ void BrowEdit::menuBar()
 
 			std::ofstream mapDataFile("mapdata.json");
 			mapDataFile << std::setw(2) << mapData;
+		}
+		ImGui::MenuItem("Claude live link (claude_link folder)", nullptr, &claudeLinkEnabled);
+		if (ImGui::MenuItem("Texture sheets for Claude..."))
+			openTextureSheetPopup = true;
+		if (ImGui::MenuItem("Export asset catalog (for Claude)"))
+		{
+			// lists the models and textures available in the client, so a map generator knows what it can use
+			nlohmann::json catalog;
+			catalog["models"] = nlohmann::json::array();
+			catalog["textures"] = nlohmann::json::array();
+			std::set<std::string> models, textures;
+			auto isAscii = [](const std::string& f) { for (unsigned char c : f) if (c > 127) return false; return true; };
+			for (auto f : util::FileIO::listAllFiles())
+			{
+				std::transform(f.begin(), f.end(), f.begin(), ::tolower);
+				std::replace(f.begin(), f.end(), '/', '\\');
+				if (!isAscii(f))
+					continue;
+				if (f.rfind("data\\model\\", 0) == 0 && f.size() > 4 && f.substr(f.size() - 4) == ".rsm")
+					models.insert(f.substr(11));
+				else if (f.rfind("data\\texture\\", 0) == 0 && f.size() > 4)
+				{
+					auto ext = f.substr(f.size() - 4);
+					if (ext == ".bmp" || ext == ".jpg" || ext == ".tga" || ext == ".png")
+						textures.insert(f.substr(13));
+				}
+			}
+			for (const auto& m : models) catalog["models"].push_back(m);
+			for (const auto& t : textures) catalog["textures"].push_back(t);
+			std::ofstream catalogFile("catalog.json");
+			catalogFile << catalog;
 		}
 		hotkeyMenuItem("Open Model Editor", HotkeyAction::Global_ModelEditor_Open);
 		hotkeyMenuItem("Quit", HotkeyAction::Global_Exit);
@@ -284,6 +432,20 @@ void BrowEdit::menuBar()
 				activeMapView->map->selectAll<RswLight>(this);
 		}
 
+		if (ImGui::MenuItem("Smart GAT: recalculate all models"))
+		{
+			// blocks the exact ground footprint of every model in the map, using the Smart model GAT settings
+			auto ga = new GroupAction("Smart GAT for all models");
+			std::vector<Node*> models;
+			activeMapView->map->rootNode->traverse([&](Node* n) {
+				if (n->getComponent<RswModel>())
+					models.push_back(n);
+			});
+			activeMapView->map->addAutoGatActions(models, autoGatBandHeight, autoGatType, ga, false, false, autoGatFillInterior, autoGatCloseGap);
+			activeMapView->map->doAction(ga, this);
+		}
+
+
 		ImGui::EndMenu();
 	}
 
@@ -309,6 +471,8 @@ void BrowEdit::menuBar()
 				activeMapView->map->exportTileColors(this, exportWalls);
 			if (ImGui::MenuItem("Export minimap"))
 				activeMapView->map->exportMinimapWalkable(this);
+			if (ImGui::MenuItem("Generate minimap (rendered)..."))
+				openMinimapPopup = true;
 			ImGui::Separator();
 			if (ImGui::MenuItem("Import shadowmap"))
 				activeMapView->map->importShadowMap(this, exportWalls, exportBorders);
@@ -322,8 +486,12 @@ void BrowEdit::menuBar()
 		}
 		hotkeyMenuItem("Calculate Quadtree", HotkeyAction::Global_CalculateQuadtree);
 		hotkeyMenuItem("Calculate lightmaps", HotkeyAction::Global_CalculateLightmaps);
+		ImGui::MenuItem("Live lightmap (re-bake on edits)", nullptr, &liveLightmap);
+			if (liveLightmap) { ImGui::SetNextItemWidth(120); ImGui::SliderFloat("Live delay (s)", &liveLightmapDelay, 0.0f, 1.0f, "%.2f"); }
 		if (ImGui::MenuItem("Make tiles unique"))
 			activeMapView->map->rootNode->getComponent<Gnd>()->makeTilesUnique();
+		if (ImGui::MenuItem("Clean unused tiles"))
+			activeMapView->map->rootNode->getComponent<Gnd>()->cleanTiles(false);
 		hotkeyMenuItem("Remove zero height walls", HotkeyAction::Global_ClearZeroHeightWalls);
 		if (ImGui::MenuItem("Remove unused ground textures"))
 			activeMapView->map->rootNode->getComponent<Gnd>()->removeUnusedTextures(this);
@@ -535,6 +703,51 @@ void BrowEdit::menuBar()
 	if (ImGui::MenuItem("Help"))
 		windowData.helpWindowVisible = true;
 
+	if (openMinimapPopup)
+	{
+		ImGui::OpenPopup("Generate minimap");
+		openMinimapPopup = false;
+		minimapResult.clear();
+	}
+	if (ImGui::BeginPopupModal("Generate minimap", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		ImGui::TextUnformatted("Top-down picture of the map, saved as <map>.bmp in data\\texture\\(user interface)\\map");
+		ImGui::SetNextItemWidth(100);
+		ImGui::InputInt("Size (pixels, square)", &minimapSize, 64, 128);
+		minimapSize = std::clamp(minimapSize, 64, 4096);
+		ImGui::SameLine(); if (ImGui::SmallButton("128")) minimapSize = 128;
+		ImGui::SameLine(); if (ImGui::SmallButton("256")) minimapSize = 256;
+		ImGui::SameLine(); if (ImGui::SmallButton("512")) minimapSize = 512;
+		ImGui::Checkbox("Shadows and light colours", &minimapShading);
+		ImGui::TextWrapped("Rendered from straight above with the ground, models, water, shadows and colours; the area outside the map is magenta (the client's transparent colour). This replaces the walkable-area minimap if you exported that earlier.");
+		if (ImGui::Button("Generate"))
+			minimapResult = activeMapView->renderMinimap(this, minimapSize, minimapShading, "");
+		ImGui::SameLine();
+		if (ImGui::Button("Close"))
+			ImGui::CloseCurrentPopup();
+		if (!minimapResult.empty())
+			ImGui::TextWrapped("%s", minimapResult.c_str());
+		ImGui::EndPopup();
+	}
+	if (openTextureSheetPopup)
+	{
+		ImGui::OpenPopup("Texture sheets");
+		openTextureSheetPopup = false;
+		textureSheetResult.clear();
+	}
+	if (ImGui::BeginPopupModal("Texture sheets", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		ImGui::TextUnformatted("Folder below data\\texture (for example prontera_re, roo, rockridge):");
+		ImGui::InputText("##prefix", textureSheetPrefix, sizeof(textureSheetPrefix));
+		if (ImGui::Button("Export"))
+			exportTextureSheets(textureSheetPrefix);
+		ImGui::SameLine();
+		if (ImGui::Button("Close"))
+			ImGui::CloseCurrentPopup();
+		if (!textureSheetResult.empty())
+			ImGui::TextWrapped("%s", textureSheetResult.c_str());
+		ImGui::EndPopup();
+	}
 	ImGui::EndMainMenuBar();
 
 

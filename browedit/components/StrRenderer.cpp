@@ -279,7 +279,15 @@ void StrRenderer::StrRenderContext::preFrame(Node* rootNode, NodeRenderContext& 
 	glDisableVertexAttribArray(2);
 	glDisableVertexAttribArray(3);
 	glDisableVertexAttribArray(4); //TODO: vao
-	glDisable(GL_DEPTH_TEST);
+	const bool depthTest = context.mapView && context.mapView->strDepthTest;
+	if (depthTest)
+	{
+		glEnable(GL_DEPTH_TEST);		// models and terrain hide the effect
+		glEnable(GL_POLYGON_OFFSET_FILL);		// keeps flat effects on the ground from flickering
+		glPolygonOffset(-1.0f, -1.0f);
+	}
+	else
+		glDisable(GL_DEPTH_TEST);
 	glEnable(GL_BLEND);
 	glDepthMask(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -340,6 +348,7 @@ void StrRenderer::StrRenderContext::preFrame(Node* rootNode, NodeRenderContext& 
 void StrRenderer::StrRenderContext::postFrame(NodeRenderContext& context)
 {
 	glDepthMask(1);
+	glDisable(GL_POLYGON_OFFSET_FILL);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glEnable(GL_DEPTH_TEST);
 }
