@@ -735,6 +735,27 @@ void MapView::render(BrowEdit* browEdit)
 	nodeRenderContext.time = (float)glfwGetTime();
 	nodeRenderContext.fbo = fbo;
 	nodeRenderContext.outlineFbo = outlineFbo;
+	// the skybox is drawn first (no depth writes) so effects and models render over it, also in the sky area
+	if (skyTexture)
+	{
+		glDepthMask(GL_FALSE);
+		simpleShader->use();
+		glm::mat4 vm = nodeRenderContext.viewMatrix;
+		vm[3][0] = 0;	vm[3][1] = 0;	vm[3][2] = 0;	vm[3][3] = 1;
+		simpleShader->setUniform(SimpleShader::Uniforms::projectionMatrix, nodeRenderContext.projectionMatrix);
+		simpleShader->setUniform(SimpleShader::Uniforms::viewMatrix, vm);
+		simpleShader->setUniform(SimpleShader::Uniforms::modelMatrix, glm::scale(glm::translate(glm::rotate(glm::mat4(1.0f), glm::radians(skyboxRotation), glm::vec3(0,1,0)), glm::vec3(0, skyboxHeight, 0)), glm::vec3(3500.0f)));
+		simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 1.0f);
+		simpleShader->setUniform(SimpleShader::Uniforms::lightMin, 1.0f);
+		skyTexture->bind();
+
+		if(skyboxCube)
+			skyBoxMesh.draw();
+		else
+			skyDomeMesh.draw();
+		glDepthMask(GL_TRUE);
+	}
+
 	NodeRenderer::render(map->rootNode, nodeRenderContext);
 
 	// Draw selection outline
@@ -862,24 +883,6 @@ void MapView::render(BrowEdit* browEdit)
 	}
 	sprite::System::instance().render(this, browEdit);
 	advtex::frame(this, browEdit);
-
-	if (skyTexture)
-	{
-		simpleShader->use();
-		glm::mat4 vm = nodeRenderContext.viewMatrix;
-		vm[3][0] = 0;	vm[3][1] = 0;	vm[3][2] = 0;	vm[3][3] = 1;
-		simpleShader->setUniform(SimpleShader::Uniforms::projectionMatrix, nodeRenderContext.projectionMatrix);
-		simpleShader->setUniform(SimpleShader::Uniforms::viewMatrix, vm);
-		simpleShader->setUniform(SimpleShader::Uniforms::modelMatrix, glm::scale(glm::translate(glm::rotate(glm::mat4(1.0f), glm::radians(skyboxRotation), glm::vec3(0,1,0)), glm::vec3(0, skyboxHeight, 0)), glm::vec3(3500.0f)));
-		simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 1.0f);
-		simpleShader->setUniform(SimpleShader::Uniforms::lightMin, 1.0f);
-		skyTexture->bind();
-
-		if(skyboxCube)
-			skyBoxMesh.draw();
-		else
-			skyDomeMesh.draw();
-	}
 
 	glUseProgram(0);
 	glMatrixMode(GL_PROJECTION);
